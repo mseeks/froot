@@ -1,11 +1,13 @@
 """Best-effort changelog source: npm registry metadata + GitHub release notes.
 
-There is no universal changelog format, so this tries the cheap, reliable
-sources — the linked GitHub repo's release notes for the version tag, then the
-npm registry's version description — and returns ``None`` when it finds nothing.
-The judge activity treats ``None`` as an ``UnknownVerdict`` without spending a
-model call (spine-heavy: never ask the model to assess an empty changelog). The
-registry-URL parsing is a pure function, unit-tested without the network.
+There is no universal changelog format, so this fetches the one cheap, reliable
+signal of *what changed*: the linked GitHub repo's release notes for the version
+tag. It returns ``None`` when there are none. A package's registry *description*
+is deliberately NOT used as a fallback — it describes what the package does, not
+what changed between versions, and feeding it to the judge produces misleading
+risk verdicts. The judge activity treats ``None`` as an ``UnknownVerdict``
+without spending a model call (spine-heavy: never ask the model to assess a
+non-changelog). The registry-URL parsing is a pure function, tested offline.
 """
 
 from __future__ import annotations
@@ -47,16 +49,6 @@ def github_repo_from_registry(metadata: Any) -> RepoRef | None:
             return None
 
 
-def _version_description(metadata: Any, target: str) -> str | None:
-    """The published ``description`` for the target version, if present."""
-    versions = metadata.get("versions") if isinstance(metadata, dict) else None
-    entry = versions.get(target) if isinstance(versions, dict) else None
-    description = entry.get("description") if isinstance(entry, dict) else None
-    if isinstance(description, str) and description.strip():
-        return description
-    return None
-
-
 class HttpChangelogSource:
     """A :class:`~froot.ports.protocols.ChangelogSource` over HTTP."""
 
@@ -78,24 +70,17 @@ class HttpChangelogSource:
             return None
         metadata = meta.json()
         repo = github_repo_from_registry(metadata)
+        if repo is None:
+            return None
         target = str(candidate.target)
-        text = None
-        source = f"{_REGISTRY}/{candidate.package}"
-        if repo is not None:
-            text = await self._release_notes(client, repo, target)
-            if text is not None:
-                source = (
-                    f"https://github.com/{repo.slug}/releases/tag/v{target}"
-                )
+        text = await self._release_notes(client, repo, target)
         if text is None:
-            text = _version_description(metadata, target)
-        if not text:
             return None
         return Changelog(
             package=candidate.package,
             version=candidate.target,
             text=text,
-            source_url=source,
+            source_url=f"https://github.com/{repo.slug}/releases/tag/v{target}",
         )
 
     @staticmethod

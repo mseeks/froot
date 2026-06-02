@@ -1,0 +1,20 @@
+# Keep the build context lean and secret-free. The Dockerfile only COPYs
+# pyproject.toml, uv.lock, README.md, and src/ — everything else is excluded so
+# .env (the token), the venv, caches, tests, and scripts never reach the daemon.
+.venv/
+.git/
+.github/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+tests/
+scripts/
+**/__pycache__/
+*.pyc
+Dockerfile
+.dockerignore

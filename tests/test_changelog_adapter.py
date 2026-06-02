@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from froot.adapters.changelog_http import (
-    _version_description,
-    github_repo_from_registry,
-)
+from froot.adapters.changelog_http import github_repo_from_registry
 
 
 @pytest.mark.parametrize(
@@ -31,8 +28,9 @@ def test_github_repo_from_registry_none_cases():
     assert github_repo_from_registry("not-a-dict") is None
 
 
-def test_version_description():
-    metadata = {"versions": {"1.4.3": {"description": "A tiny lib."}}}
-    assert _version_description(metadata, "1.4.3") == "A tiny lib."
-    assert _version_description(metadata, "9.9.9") is None
-    assert _version_description({}, "1.4.3") is None
+def test_github_repo_from_registry_string_form_and_missing():
+    # A bare string ``repository`` and an empty url both behave sanely.
+    ref = github_repo_from_registry({"repository": "github.com/a/b"})
+    assert ref is not None
+    assert ref.slug == "a/b"
+    assert github_repo_from_registry({"repository": {"url": ""}}) is None
