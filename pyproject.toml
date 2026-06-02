@@ -1,0 +1,158 @@
+[project]
+name = "froot"
+version = "0.1.0"
+description = "Durable, self-scheduled code-maintenance loops on Temporal, pointed at any repo. First loop: dependency-patch (Pydantic AI on Temporal)."
+readme = "README.md"
+# Pinned to a uv-managed 3.13 (see .python-version): the local Homebrew 3.14
+# ships a broken pyexpat, and Temporal, Pydantic AI, and Pydantic v2 all support
+# 3.13. Mirrors the ynab-agent chassis this is modeled on.
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "pydantic>=2.10",
+    "pydantic-settings>=2.4",
+    "temporalio>=1.27.2",
+]
+
+[project.optional-dependencies]
+# Dev tooling: linters, type-checker, test runner, property-based testing.
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "hypothesis>=6.100.0",
+    "mypy>=1.13.0",
+    "ruff>=0.8.0",
+]
+# The thin model judgment (is this changelog a clean patch?): a Pydantic AI agent
+# over a local Ollama via its OpenAI-compatible /v1, mirroring ynab-agent. Kept
+# out of the default env so the pure core never pulls the model stack into a
+# Temporal workflow sandbox.
+ai = [
+    "pydantic-ai-slim[openai]>=0.0.20",
+]
+# The GitHub adapter (open/find PRs, read CI status, set labels) — a thin httpx
+# client behind a protocol; the token comes from the environment.
+github = [
+    "httpx>=0.27",
+]
+# OpenTelemetry: distributed traces + Temporal SDK metrics for the worker
+# (the run-telemetry half of "derive, never store"). Traces export OTLP/HTTP
+# (no grpcio wheel); SDK metrics export via Temporal's own Rust OTLP exporter.
+otel = [
+    "temporalio[opentelemetry]>=1.27.2",
+    "opentelemetry-sdk>=1.42,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.42,<2",
+    "opentelemetry-instrumentation-httpx>=0.63b0,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/froot"]
+
+# ── Type checking: strict, the DDD safety net ───────────────────────────────
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+show_error_codes = true
+# The pydantic plugin teaches mypy about model fields, frozen-ness, and smart
+# constructors — load-bearing for "make illegal states unrepresentable".
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+files = ["src", "tests"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# Source stays fully strict; tests need not annotate every function's return
+# (boilerplate), but their bodies are still type-checked (check_untyped_defs is
+# on) and the fakes/builders are fully typed.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+# ── Lint + format: ruff, Google style ───────────────────────────────────────
+[tool.ruff]
+target-version = "py313"
+# Google Python Style Guide: 80 columns.
+line-length = 80
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "PTH",    # flake8-use-pathlib
+    "RUF",    # ruff-specific
+    "D",      # pydocstyle (Google convention)
+]
+ignore = [
+    "D100",   # Missing docstring in public module
+    "D104",   # Missing docstring in public package
+    "D105",   # Missing docstring in magic method (dunders are self-evident)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic evaluates field-type annotations at runtime to build validators, so
+# their imports must NOT be moved into a TYPE_CHECKING block. Tell ruff that
+# annotations on these base classes are runtime-evaluated.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "froot.domain.base.Frozen",
+]
+# Temporal resolves signal/query/run/activity type hints at runtime to (de)
+# serialize payloads, so those imports must NOT move into a TYPE_CHECKING block.
+runtime-evaluated-decorators = [
+    "temporalio.workflow.signal",
+    "temporalio.workflow.query",
+    "temporalio.workflow.run",
+    "temporalio.activity.defn",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["froot"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document behavior through their names; full docstring coverage is noise.
+"tests/**" = [
+    "D100", "D101", "D102", "D103", "D104", "D107",
+    "ARG",  # fakes mirror port signatures; unused params are the contract
+    "TC001", "TC002", "TC003",  # tests don't need TYPE_CHECKING import gating
+]
+# Activity stubs are unimplemented ports: their signatures are the contract, so
+# the params are intentionally unused until the real implementations land.
+"src/froot/workflow/activities.py" = ["ARG001"]
+
+# ── Tests ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --cov=froot --cov-report=term-missing"
