@@ -1,19 +1,9 @@
 from __future__ import annotations
 
-import pytest
-
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
-from froot.domain.ci import (
-    CIAbsent,
-    CIFailed,
-    CIPassed,
-    CITimedOut,
-    TerminalCIStatus,
-)
-from froot.domain.outcome import LoopOutcome
-from froot.policy.compose import outcome_labels, pull_request_draft
+from froot.policy.compose import PR_LABELS, pull_request_draft
 from froot.policy.naming import branch_name
-from tests.support import make_candidate, make_pr, make_repo
+from tests.support import make_candidate, make_repo
 
 
 def test_pull_request_draft_clean():
@@ -50,22 +40,10 @@ def test_pull_request_draft_unknown():
     assert "no notes" in draft.body
 
 
-@pytest.mark.parametrize(
-    "ci,label",
-    [
-        (CIPassed(), "ci:passed"),
-        (CIFailed(), "ci:failed"),
-        (CIAbsent(), "ci:no-checks"),
-        (CITimedOut(), "ci:timed-out"),
-    ],
-)
-def test_outcome_labels(ci: TerminalCIStatus, label: str):
-    outcome = LoopOutcome(
-        candidate=make_candidate(),
-        verdict=RiskyVerdict(rationale="r"),
-        pr=make_pr(),
-        ci=ci,
-    )
-    labels = outcome_labels(outcome)
-    expected = {"froot", "dependency-patch", "changelog:risky", label}
-    assert expected <= set(labels)
+def test_pr_labels_are_exactly_the_fixed_pair():
+    """Every froot PR carries just these two — no changelog/CI labels.
+
+    How the proposal fared is recorded in the durable workflow history, not
+    layered onto the PR as labels that accumulate across re-runs.
+    """
+    assert PR_LABELS == ("froot", "dependency-patch")

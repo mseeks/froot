@@ -1,10 +1,11 @@
-"""Compose the PR content and the outcome labels — pure, no model call.
+"""Compose the PR content and the PR labels — pure, no model call.
 
-Spine-heavy: the PR title/body and the labels are deterministic templates over
-the candidate, the model's changelog verdict, and the terminal CI status. The
-model already did its one job (the verdict); rendering text is mechanical, so it
-costs no model round-trip. These are
-the strings the forge writes — the human-facing half of "derive, never store".
+Spine-heavy: the PR title/body are deterministic templates over the candidate
+and the model's changelog verdict (the model already did its one job — the
+verdict — so rendering the text costs no model round-trip). froot tags every PR
+with one fixed pair of labels; the per-run changelog/CI signal lives in the
+durable workflow history (and the structured outcome log), not as accumulating
+labels on the PR.
 """
 
 from __future__ import annotations
@@ -12,13 +13,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, assert_never
 
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
-from froot.domain.ci import (
-    CIAbsent,
-    CIFailed,
-    CIPassed,
-    CIPending,
-    CITimedOut,
-)
 from froot.domain.ecosystem import manifest_filename
 from froot.domain.pull_request import PullRequestDraft
 from froot.policy.naming import branch_name
@@ -26,11 +20,16 @@ from froot.policy.naming import branch_name
 if TYPE_CHECKING:
     from froot.domain.candidate import PatchCandidate
     from froot.domain.changelog import ChangelogVerdict
-    from froot.domain.ci import CIStatus
-    from froot.domain.outcome import LoopOutcome
     from froot.domain.repo import TargetRepo
 
 _LABEL_NAMESPACE = "froot"
+
+# The fixed labels froot puts on every PR it opens. Deliberately just these two:
+# they mark the PR as froot's dependency-patch work, nothing more. How the
+# proposal fared (the changelog verdict, the CI result) is recorded durably in
+# the workflow history, not layered onto the PR as labels that pile up across
+# re-runs.
+PR_LABELS: tuple[str, str] = (_LABEL_NAMESPACE, "dependency-patch")
 
 
 def _verdict_summary(verdict: ChangelogVerdict) -> str:
@@ -78,35 +77,4 @@ def pull_request_draft(
         base=target.default_branch,
         title=f"deps: bump {candidate.package} to {candidate.target}",
         body=body,
-    )
-
-
-def _ci_label(status: CIStatus) -> str:
-    """Map a terminal CI status to its PR label."""
-    match status:
-        case CIPassed():
-            return "ci:passed"
-        case CIFailed():
-            return "ci:failed"
-        case CIAbsent():
-            return "ci:no-checks"
-        case CITimedOut():
-            return "ci:timed-out"
-        case CIPending():
-            return "ci:pending"
-    assert_never(status)
-
-
-def outcome_labels(outcome: LoopOutcome) -> tuple[str, ...]:
-    """Derive the PR labels that record how a proposal fared.
-
-    These labels are the human-readable signal-update: the next reader (a
-    person, or a later reputation query) sees froot's verdict and the CI result
-    on the PR itself — no separate store.
-    """
-    return (
-        _LABEL_NAMESPACE,
-        "dependency-patch",
-        f"changelog:{outcome.verdict.kind}",
-        _ci_label(outcome.ci),
     )

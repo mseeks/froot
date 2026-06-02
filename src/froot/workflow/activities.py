@@ -23,7 +23,7 @@ from froot.domain.ci import CIStatus
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.repo import TargetRepo
 from froot.policy.candidates import select_patch_candidates
-from froot.policy.compose import outcome_labels, pull_request_draft
+from froot.policy.compose import PR_LABELS, pull_request_draft
 from froot.policy.naming import branch_name, bump_workflow_id
 from froot.workflow.types import (
     CiCheckInput,
@@ -108,9 +108,7 @@ async def record_outcome(params: RecordInput) -> None:
     from froot.adapters.github import GitHubForge
 
     outcome = params.outcome
-    await GitHubForge().add_labels(
-        params.target, outcome.pr.number, outcome_labels(outcome)
-    )
+    await GitHubForge().add_labels(params.target, outcome.pr.number, PR_LABELS)
     _log.info(
         json.dumps(
             {

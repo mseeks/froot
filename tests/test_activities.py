@@ -137,8 +137,8 @@ async def test_record_outcome_sets_labels(monkeypatch: pytest.MonkeyPatch):
         RecordInput(target=make_repo(), outcome=outcome)
     )
     assert fake.labeled is not None
-    assert "ci:passed" in fake.labeled
-    assert "changelog:clean" in fake.labeled
+    # Exactly the fixed pair — no changelog/CI labels, regardless of outcome.
+    assert set(fake.labeled) == {"froot", "dependency-patch"}
 
 
 class _FakeClient:
