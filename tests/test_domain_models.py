@@ -57,6 +57,8 @@ def test_branch_name_validation():
 def test_ecosystem_files():
     assert manifest_filename(Ecosystem.NPM) == "package.json"
     assert lockfile_filename(Ecosystem.NPM) == "package-lock.json"
+    assert manifest_filename(Ecosystem.UV) == "pyproject.toml"
+    assert lockfile_filename(Ecosystem.UV) == "uv.lock"
 
 
 def test_ci_is_terminal():

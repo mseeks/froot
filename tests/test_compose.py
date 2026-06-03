@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
+from froot.domain.ecosystem import Ecosystem
 from froot.policy.compose import PR_LABELS, pull_request_draft
 from froot.policy.naming import branch_name
 from tests.support import make_candidate, make_repo
@@ -19,6 +20,19 @@ def test_pull_request_draft_clean():
     assert "package.json" in draft.body
     assert "a human approves" in draft.body
     assert "fixes" in draft.body
+
+
+def test_pull_request_draft_uv_describes_lockfile_only():
+    # A uv bump rewrites only uv.lock; the body must not tell the human approver
+    # that pyproject.toml changed when the diff won't contain it.
+    repo = make_repo("acme/pylib", ecosystem=Ecosystem.UV)
+    candidate = make_candidate(
+        package="idna", current="3.6.0", target="3.6.1", ecosystem=Ecosystem.UV
+    )
+    draft = pull_request_draft(repo, candidate, CleanVerdict(rationale="ok"))
+    assert "uv.lock only" in draft.body
+    assert "pyproject.toml unchanged" in draft.body
+    assert "pyproject.toml + lockfile" not in draft.body
 
 
 def test_pull_request_draft_risky_renders_concerns():

@@ -46,10 +46,10 @@ async def scan_candidates(
 ) -> tuple[PatchCandidate, ...]:
     """Check out the repo, read available upgrades, select patch candidates."""
     from froot.adapters.github import GitHubForge
-    from froot.adapters.npm import NpmPackageManager
+    from froot.adapters.registry import package_manager_for
 
     forge = GitHubForge()
-    package_manager = NpmPackageManager()
+    package_manager = package_manager_for(target.ecosystem)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(target, workspace)
@@ -75,10 +75,10 @@ async def judge_changelog(candidate: PatchCandidate) -> ChangelogVerdict:
 async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
     """Regenerate manifest+lockfile and open (idempotently) the bump's PR."""
     from froot.adapters.github import GitHubForge
-    from froot.adapters.npm import NpmPackageManager
+    from froot.adapters.registry import package_manager_for
 
     forge = GitHubForge()
-    package_manager = NpmPackageManager()
+    package_manager = package_manager_for(params.target.ecosystem)
     branch = branch_name(params.candidate)
     existing = await forge.find_open_pull_request(params.target, branch)
     if existing is not None:

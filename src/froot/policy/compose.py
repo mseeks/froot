@@ -13,7 +13,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, assert_never
 
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
-from froot.domain.ecosystem import manifest_filename
+from froot.domain.ecosystem import (
+    Ecosystem,
+    lockfile_filename,
+    manifest_filename,
+)
 from froot.domain.pull_request import PullRequestDraft
 from froot.policy.naming import branch_name
 
@@ -30,6 +34,26 @@ _LABEL_NAMESPACE = "froot"
 # the workflow history, not layered onto the PR as labels that pile up across
 # re-runs.
 PR_LABELS: tuple[str, str] = (_LABEL_NAMESPACE, "dependency-patch")
+
+
+def _changed_files(ecosystem: Ecosystem) -> str:
+    """Describe which files a bump rewrites, for the PR body.
+
+    The phrase must match the diff the human approver actually sees. npm
+    rewrites both the manifest and the lockfile (``npm install
+    --package-lock-only`` updates the dependency spec too); uv rewrites only the
+    lockfile, because a patch stays within the existing ``pyproject.toml``
+    constraint, so the manifest is left untouched.
+    """
+    match ecosystem:
+        case Ecosystem.NPM:
+            return f"{manifest_filename(ecosystem)} + lockfile"
+        case Ecosystem.UV:
+            return (
+                f"{lockfile_filename(ecosystem)} only; "
+                f"{manifest_filename(ecosystem)} unchanged"
+            )
+    assert_never(ecosystem)
 
 
 def _verdict_summary(verdict: ChangelogVerdict) -> str:
@@ -60,11 +84,10 @@ def pull_request_draft(
     Returns:
         A :class:`PullRequestDraft` ready for the forge to open.
     """
-    manifest = manifest_filename(candidate.ecosystem)
     body = "\n".join(
         (
             f"Bumps `{candidate.package}` from {candidate.current} to "
-            f"{candidate.target} ({manifest} + lockfile).",
+            f"{candidate.target} ({_changed_files(candidate.ecosystem)}).",
             "",
             _verdict_summary(verdict),
             "",
