@@ -240,7 +240,7 @@ class UvPackageManager:
         self, candidate: PatchCandidate, workspace: Path
     ) -> None:
         """Regenerate ``uv.lock`` at the target version (lockfile-only)."""
-        code, out = await run_text(
+        code, out, err = await run_text(
             "uv",
             "lock",
             "--upgrade-package",
@@ -248,4 +248,4 @@ class UvPackageManager:
             cwd=workspace,
         )
         if code != 0:
-            raise RuntimeError(f"uv lock failed ({code}): {out}")
+            raise RuntimeError(f"uv lock failed ({code}): {err or out}")

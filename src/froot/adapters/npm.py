@@ -133,7 +133,7 @@ class NpmPackageManager:
                     pass
                 case _:
                     continue
-            _, versions_out = await run_text(
+            _, versions_out, _ = await run_text(
                 "npm", "view", name, "versions", "--json", cwd=workspace
             )
             upgrades.append(
@@ -150,7 +150,7 @@ class NpmPackageManager:
         self, candidate: PatchCandidate, workspace: Path
     ) -> None:
         """Rewrite the manifest + lockfile to the target (lockfile-only)."""
-        code, out = await run_text(
+        code, out, err = await run_text(
             "npm",
             "install",
             f"{candidate.package}@{candidate.target}",
@@ -159,4 +159,4 @@ class NpmPackageManager:
             cwd=workspace,
         )
         if code != 0:
-            raise RuntimeError(f"npm install failed ({code}): {out}")
+            raise RuntimeError(f"npm install failed ({code}): {err or out}")
