@@ -151,7 +151,7 @@ class GitHubForge:
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         """Shallow-clone the repo's default branch into ``workspace``."""
-        code, out = await run_text(
+        code, out, err = await run_text(
             "git",
             "clone",
             "--depth",
@@ -163,7 +163,7 @@ class GitHubForge:
             cwd=workspace,
         )
         if code != 0:
-            raise RuntimeError(f"git clone failed ({code}): {out}")
+            raise RuntimeError(f"git clone failed ({code}): {err or out}")
 
     async def checkout_pull_request(
         self, target: TargetRepo, workspace: Path, number: int
@@ -182,10 +182,10 @@ class GitHubForge:
             ("git", "checkout", "-q", "FETCH_HEAD"),
         )
         for step in steps:
-            code, out = await run_text(*step, cwd=workspace)
+            code, out, err = await run_text(*step, cwd=workspace)
             if code != 0:
                 raise RuntimeError(
-                    f"git {step[1]} ({ref}) failed ({code}): {out}"
+                    f"git {step[1]} ({ref}) failed ({code}): {err or out}"
                 )
 
     async def push_branch(
@@ -208,10 +208,10 @@ class GitHubForge:
             ("git", "push", "-u", "origin", branch.value),
         )
         for step in steps:
-            code, out = await run_text(*step, cwd=workspace)
+            code, out, err = await run_text(*step, cwd=workspace)
             if code != 0:
-                raise RuntimeError(f"{step[0:2]} failed ({code}): {out}")
-        code, sha = await run_text("git", "rev-parse", "HEAD", cwd=workspace)
+                raise RuntimeError(f"{step[0:2]} failed ({code}): {err or out}")
+        code, sha, _ = await run_text("git", "rev-parse", "HEAD", cwd=workspace)
         if code != 0:
             raise RuntimeError(f"git rev-parse failed ({code})")
         return sha.strip()

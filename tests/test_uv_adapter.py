@@ -6,6 +6,7 @@ from froot.adapters.npm import NpmPackageManager
 from froot.adapters.registry import package_manager_for
 from froot.adapters.uv import (
     UvPackageManager,
+    _pinned_python_minor,
     normalize_name,
     parse_available_versions,
     parse_direct_dependencies,
@@ -101,3 +102,14 @@ def test_parse_available_versions_empty_or_garbage():
 def test_package_manager_for_dispatch():
     assert isinstance(package_manager_for(Ecosystem.NPM), NpmPackageManager)
     assert isinstance(package_manager_for(Ecosystem.UV), UvPackageManager)
+
+
+def test_pinned_python_minor_truncates_patch(tmp_path):
+    (tmp_path / ".python-version").write_text("3.13.13\n")
+    assert _pinned_python_minor(tmp_path) == "3.13"
+
+
+def test_pinned_python_minor_absent_or_malformed(tmp_path):
+    assert _pinned_python_minor(tmp_path) is None
+    (tmp_path / ".python-version").write_text("system\n")
+    assert _pinned_python_minor(tmp_path) is None
