@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 
 from temporalio.client import Client
@@ -28,7 +29,7 @@ from froot.adapters.telemetry import (
     shutdown_tracing,
     tracing_interceptors,
 )
-from froot.config.settings import TemporalSettings
+from froot.config.settings import DashboardSettings, TemporalSettings
 from froot.workflow.runtime import ALL_ACTIVITIES, DATA_CONVERTER, WORKFLOWS
 
 # Process one activity at a time: the model judge calls a single local Gemma
@@ -76,10 +77,29 @@ async def run_worker(
     for sig in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
+    # The read-model dashboard shares this process and this client (lazy import
+    # so httpx/the dashboard never load when it is switched off). It serves a
+    # derived 10,000ft view; reach it with `kubectl port-forward`. A failure to
+    # start it (e.g. the port is taken) must never take the worker down — it is
+    # a non-load-bearing debug surface, so degrade to running without it.
+    dashboard = None
+    if DashboardSettings().enabled:
+        from froot.dashboard.server import start as start_dashboard
+
+        try:
+            dashboard = await start_dashboard(client)
+        except Exception:
+            logging.getLogger("froot.worker").exception(
+                "dashboard failed to start; running worker without it"
+            )
     try:
         async with worker:
             await stop.wait()
     finally:
+        if dashboard is not None:
+            dashboard.close()
+            with contextlib.suppress(Exception):
+                await dashboard.wait_closed()
         shutdown_tracing()
 
 

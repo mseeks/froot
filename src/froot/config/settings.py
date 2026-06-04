@@ -123,3 +123,59 @@ class TelemetrySettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return False
         return value
+
+
+class ClickHouseSettings(BaseSettings):
+    """ClickHouse (the run ledger) connection for the dashboard read-model.
+
+    Every field is optional: when ``FROOT_CLICKHOUSE_URL`` is unset the
+    dashboard renders the run-telemetry panel as *unavailable* rather than
+    failing. That panel is best-effort enrichment — GitHub (outcomes) and
+    Temporal (live runs) are the dependable sources; ClickHouse only adds
+    trace-derived run telemetry, on a 3-day TTL at that. The password is a
+    :class:`~pydantic.SecretStr`.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_CLICKHOUSE_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    # Host only, e.g. ``http://clickhouse:8123`` — NEVER embed credentials as
+    # userinfo (``http://user:pw@host``): they belong in ``user``/``password``
+    # so they stay out of error strings the dashboard may surface.
+    url: str | None = None
+    user: str = Field(default="default", min_length=1)
+    password: SecretStr | None = None
+    database: str = Field(default="default", min_length=1)
+
+
+class DashboardSettings(BaseSettings):
+    """The read-model dashboard's HTTP surface, served by the worker.
+
+    A read-only page the worker serves on ``FROOT_DASHBOARD_PORT``; reach it
+    with ``kubectl port-forward``. It derives everything on request and stores
+    nothing (froot's own derived-state invariant), so it is safe to leave on.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_DASHBOARD_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    enabled: bool = True
+    # Bind all interfaces so an in-cluster ``kubectl port-forward`` reaches it.
+    host: str = Field(default="0.0.0.0", min_length=1)
+    port: int = Field(default=8080, gt=0, le=65535)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_is_on(cls, value: object) -> object:
+        """Treat an empty/whitespace value as the default (on), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return True
+        return value

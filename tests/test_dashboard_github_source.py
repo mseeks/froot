@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from froot.dashboard.github_source import _to_pr as to_pr
+from froot.dashboard.github_source import (
+    parse_from_version,
+    parse_title,
+    parse_verdict,
+)
+
+
+def test_parse_title_extracts_package_and_target():
+    assert parse_title("deps: bump vitest to 3.2.6") == ("vitest", "3.2.6")
+    assert parse_title("deps: bump @nuxt/test-utils to 3.19.2") == (
+        "@nuxt/test-utils",
+        "3.19.2",
+    )
+
+
+def test_parse_title_rejects_non_froot_titles():
+    assert parse_title("chore: update readme") is None
+    assert parse_title("deps: bump vitest") is None
+    assert parse_title("") is None
+
+
+def test_parse_from_version():
+    body = "Bumps `nuxt` from 3.21.6 to 3.21.7 (package.json + lockfile)."
+    assert parse_from_version(body) == "3.21.6"
+    assert parse_from_version(None) is None
+    assert parse_from_version("no versions here") is None
+
+
+def test_parse_verdict_covers_every_template_opener():
+    assert parse_verdict("Changelog reads clean. Only a bug fix.") == "clean"
+    assert parse_verdict("Review carefully. A deprecation.") == "risky"
+    assert parse_verdict("Changelog unavailable. None found.") == "unknown"
+    assert parse_verdict("something else") is None
+    assert parse_verdict(None) is None
+
+
+def test_to_pr_marks_merged_when_pull_request_has_merged_at():
+    pr = to_pr(
+        "acme/widgets",
+        {
+            "number": 7,
+            "title": "deps: bump left-pad to 1.4.3",
+            "html_url": "https://github.com/acme/widgets/pull/7",
+            "state": "closed",
+            "created_at": "2026-06-02T19:45:00Z",
+            "body": (
+                "Bumps `left-pad` from 1.4.2 to 1.4.3. Changelog reads clean."
+            ),
+            "pull_request": {"merged_at": "2026-06-02T20:00:00Z"},
+        },
+    )
+    assert pr is not None
+    assert pr.state == "merged"
+    assert pr.package == "left-pad"
+    assert pr.from_version == "1.4.2"
+    assert pr.to_version == "1.4.3"
+    assert pr.verdict == "clean"
+    assert pr.merged_at is not None
+
+
+def test_to_pr_distinguishes_open_from_closed_unmerged():
+    opened = to_pr(
+        "acme/widgets",
+        {
+            "number": 8,
+            "title": "deps: bump x to 1.0.1",
+            "state": "open",
+            "pull_request": {"merged_at": None},
+        },
+    )
+    closed = to_pr(
+        "acme/widgets",
+        {
+            "number": 9,
+            "title": "deps: bump x to 1.0.1",
+            "state": "closed",
+            "pull_request": {"merged_at": None},
+        },
+    )
+    assert opened is not None and opened.state == "open"
+    assert closed is not None and closed.state == "closed"
+
+
+def test_to_pr_skips_plain_issues():
+    assert to_pr("acme/widgets", {"number": 1, "title": "a bug"}) is None
+    assert to_pr("acme/widgets", "not a dict") is None
