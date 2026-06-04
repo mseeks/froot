@@ -12,7 +12,8 @@
 
 Each consumer builds the small model it needs at its point of use; nothing
 secret lives in the repo. ``repos`` is ``NoDecode`` so ``FROOT_REPOS`` is a
-comma-separated list of ``owner/name`` slugs rather than JSON.
+comma-separated list of ``owner/name`` slugs rather than JSON; a slug may carry
+an optional ``@<ecosystem>`` suffix (e.g. ``acme/pylib@uv``), defaulting to npm.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Annotated
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from froot.domain.ecosystem import Ecosystem
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.result import Ok
 
@@ -46,19 +48,30 @@ class Settings(BaseSettings):
     @field_validator("repos", mode="before")
     @classmethod
     def _parse_repos(cls, value: object) -> object:
-        """Accept ``FROOT_REPOS`` as a comma-separated ``owner/name`` list."""
+        """Parse ``FROOT_REPOS`` as a comma-separated target list.
+
+        Each entry is an ``owner/name`` slug, optionally suffixed with
+        ``@<ecosystem>`` (e.g. ``acme/pylib@uv``); the suffix is omitted for the
+        default ``npm``.
+        """
         if not isinstance(value, str):
             return value
         targets: list[TargetRepo] = []
         for raw in value.split(","):
-            slug = raw.strip()
-            if not slug:
+            entry = raw.strip()
+            if not entry:
                 continue
+            slug, _, eco = entry.partition("@")
             match RepoRef.parse(slug):
                 case Ok(ref):
-                    targets.append(TargetRepo(repo=ref))
+                    pass
                 case _:
                     raise ValueError(f"invalid repo slug: {slug!r}")
+            try:
+                ecosystem = Ecosystem(eco) if eco else Ecosystem.NPM
+            except ValueError:
+                raise ValueError(f"unknown ecosystem: {eco!r}") from None
+            targets.append(TargetRepo(repo=ref, ecosystem=ecosystem))
         return tuple(targets)
 
 

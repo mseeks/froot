@@ -2,15 +2,17 @@
 # DOKS cluster. The GitHub token and the model/OTEL endpoints are read from the
 # environment at runtime (never baked in); the worker connects to Temporal.
 #
-# Unlike a pure-Python worker, froot's image also carries `git` and `npm`: the
-# loop shallow-clones the target repo and regenerates its lockfile with
-# `npm install --package-lock-only --ignore-scripts` — no node_modules and no
-# install scripts, so no project or dependency code ever runs here. The real
+# Unlike a pure-Python worker, froot's image also carries `git`, `npm`, and `uv`
+# (the base image): the loop shallow-clones the target repo and regenerates its
+# lockfile only — `npm install --package-lock-only --ignore-scripts` for npm,
+# `uv lock --upgrade-package` for Python — so no node_modules, no virtualenv,
+# and no install scripts: no project or dependency code ever runs here. The real
 # install + tests run in the target repo's own CI (the verification oracle).
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
-# git: clone/branch/push the bump PR. nodejs+npm: lockfile-only regen + version
-# lookups (npm view). Slim — no project/dependency code executes in this image.
+# git: clone/branch/push the bump PR. nodejs+npm: npm lockfile-only regen +
+# version lookups (npm view); uv (from the base image) does the same for Python.
+# Slim — no project/dependency code executes in this image.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git nodejs npm ca-certificates \

@@ -10,6 +10,7 @@ from froot.config.settings import (
     TelemetrySettings,
     TemporalSettings,
 )
+from froot.domain.ecosystem import Ecosystem
 
 
 def test_parses_repo_slugs(monkeypatch: pytest.MonkeyPatch):
@@ -22,6 +23,21 @@ def test_parses_repo_slugs(monkeypatch: pytest.MonkeyPatch):
     ]
     assert settings.repos[0].default_branch == "main"
     assert settings.scan_interval_seconds == 3600
+
+
+def test_parses_ecosystem_suffix(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_REPOS", "acme/widgets, acme/pylib@uv")
+    repos = Settings().repos
+    assert repos[0].repo.slug == "acme/widgets"
+    assert repos[0].ecosystem is Ecosystem.NPM  # default when no suffix
+    assert repos[1].repo.slug == "acme/pylib"
+    assert repos[1].ecosystem is Ecosystem.UV
+
+
+def test_unknown_ecosystem_rejected(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_REPOS", "acme/pylib@cargo")
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_default_interval(monkeypatch: pytest.MonkeyPatch):

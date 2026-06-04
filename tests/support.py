@@ -49,10 +49,14 @@ def make_candidate(
 
 
 def make_repo(
-    slug: str = "acme/widgets", default_branch: str = "main"
+    slug: str = "acme/widgets",
+    default_branch: str = "main",
+    ecosystem: Ecosystem = Ecosystem.NPM,
 ) -> TargetRepo:
     return TargetRepo(
-        repo=unwrap(RepoRef.parse(slug)), default_branch=default_branch
+        repo=unwrap(RepoRef.parse(slug)),
+        default_branch=default_branch,
+        ecosystem=ecosystem,
     )
 
 

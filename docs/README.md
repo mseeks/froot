@@ -1,14 +1,16 @@
 # Reading guides
 
-Self-contained, code-level walkthroughs of froot. Open either file in a browser —
-each is fully standalone (no network needed), with folding source, inline
-diagrams, a navigable table of contents, and a light/dark toggle.
+froot's code-level reading guides are now hosted at
+**[static.mseeks.me/froot](https://static.mseeks.me/froot/)** — they used to live
+in this folder as committed HTML, but moved out with the rest of the shareable
+pages.
 
-| File | What it is |
+| Guide | What it is |
 |---|---|
-| [`froot-explained.html`](./froot-explained.html) | **The essential reading.** A reviewer's cut: ~12 sections covering the architecture, the load-bearing invariants, the loop logic, the ports seam, the safety-critical adapter code, the durable spine, secret handling, the time-skipping test, the deploy, and a verdict. Key code is shown as snippets; expand any block for surrounding context. |
-| [`froot-explained-full.html`](./froot-explained-full.html) | **The full edition.** Every one of froot's source lines, plus the tests, infra, and CI, walked top to bottom across 50 sections with 15 diagrams. |
+| [froot, explained](https://static.mseeks.me/froot/froot-explained) | The reviewer's cut of the whole codebase — architecture, the load-bearing invariants, the loop, the ports seam, the durable spine, and a verdict. |
+| [froot learns Python](https://static.mseeks.me/froot/uv-ecosystem-explained) | A walkthrough of the change that adds uv (Python) as froot's second package ecosystem. |
 
-Each claim in these guides was fact-checked against the source, and the prose was
-linted for quality. Start with the essential reading; drop into the full edition
-when you want the line-by-line detail.
+Each page is self-contained (foldable source, inline diagrams, light/dark) and
+every claim was fact-checked against the source. They are generated with
+[readthrough](https://github.com/mseeks/readthrough) and served from the
+[static](https://github.com/mseeks/static) site.

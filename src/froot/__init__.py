@@ -12,8 +12,8 @@ The package is layered, strictly inward-depending:
 * :mod:`froot.policy` — pure functions over the domain (candidate selection,
   deterministic naming, the loop state machine).
 * :mod:`froot.ports` — typed Protocols for the impure world.
-* :mod:`froot.adapters` — concrete implementations of the ports (npm, GitHub,
-  the changelog source, the model judge, telemetry, the clock).
+* :mod:`froot.adapters` — concrete implementations of the ports (npm and uv
+  package managers, GitHub, the changelog source, the model judge, telemetry).
 * :mod:`froot.workflow` — the thin Temporal spine (workflows + activities) that
   drives the pure core and interprets its effects.
 """

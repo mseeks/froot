@@ -7,7 +7,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 import froot.adapters.changelog_http as changelog_mod
 import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
-import froot.adapters.npm as npm_mod
+import froot.adapters.registry as registry_mod
 import froot.workflow.temporal_client as temporal_client
 from froot.domain.candidate import AvailableUpgrade
 from froot.domain.changelog import Changelog, CleanVerdict, UnknownVerdict
@@ -47,10 +47,27 @@ async def test_scan_candidates_selects_patches(
     )
     monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
     monkeypatch.setattr(
-        npm_mod, "NpmPackageManager", lambda: FakePackageManager(upgrades)
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(upgrades),
     )
     result = await activities.scan_candidates(make_repo())
     assert [candidate.target for candidate in result] == [ver("1.4.3")]
+
+
+async def test_scan_candidates_selects_package_manager_by_ecosystem(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, Ecosystem] = {}
+
+    def factory(ecosystem: Ecosystem) -> FakePackageManager:
+        seen["ecosystem"] = ecosystem
+        return FakePackageManager(())
+
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(registry_mod, "package_manager_for", factory)
+    await activities.scan_candidates(make_repo(ecosystem=Ecosystem.UV))
+    assert seen["ecosystem"] is Ecosystem.UV
 
 
 async def test_judge_changelog_unknown_when_missing(
@@ -86,7 +103,11 @@ async def test_open_pull_request_idempotent_short_circuit(
 ):
     fake = FakeForge(existing_pr=make_pr(number=42))
     monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
-    monkeypatch.setattr(npm_mod, "NpmPackageManager", FakePackageManager)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(),
+    )
     params = OpenPrInput(
         target=make_repo(),
         candidate=make_candidate(),
@@ -101,7 +122,9 @@ async def test_open_pull_request_full_path(monkeypatch: pytest.MonkeyPatch):
     fake = FakeForge(existing_pr=None, opened_pr=make_pr(number=7))
     package_manager = FakePackageManager()
     monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
-    monkeypatch.setattr(npm_mod, "NpmPackageManager", lambda: package_manager)
+    monkeypatch.setattr(
+        registry_mod, "package_manager_for", lambda ecosystem: package_manager
+    )
     params = OpenPrInput(
         target=make_repo(),
         candidate=make_candidate(),
