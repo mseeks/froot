@@ -197,6 +197,23 @@ async def _available_versions(
     return parse_available_versions(response.text)
 
 
+def _pinned_python_minor(workspace: Path) -> str | None:
+    """``major.minor`` from the workspace's ``.python-version``, if present.
+
+    A lockfile-only bump is insensitive to the interpreter's *patch* version,
+    but a target often pins an exact patch (e.g. ``3.13.13``) the build image
+    can't supply, which makes ``uv lock`` fail outright. Locking against the
+    minor lets uv use whatever ``3.13.x`` is on hand.
+    """
+    pin = workspace / ".python-version"
+    if not pin.exists():
+        return None
+    parts = pin.read_text().strip().split(".")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        return f"{parts[0]}.{parts[1]}"
+    return None
+
+
 class UvPackageManager:
     """A :class:`~froot.ports.protocols.PackageManager` backed by ``uv``."""
 
@@ -240,12 +257,17 @@ class UvPackageManager:
         self, candidate: PatchCandidate, workspace: Path
     ) -> None:
         """Regenerate ``uv.lock`` at the target version (lockfile-only)."""
-        code, out, err = await run_text(
+        args = [
             "uv",
             "lock",
             "--upgrade-package",
             f"{candidate.package}=={candidate.target}",
-            cwd=workspace,
-        )
+        ]
+        # Lock against the pinned interpreter's MINOR (not its exact patch): a
+        # target may pin a patch the build image lacks, which `uv lock` rejects.
+        minor = _pinned_python_minor(workspace)
+        if minor is not None:
+            args += ["--python", minor]
+        code, out, err = await run_text(*args, cwd=workspace)
         if code != 0:
             raise RuntimeError(f"uv lock failed ({code}): {err or out}")
