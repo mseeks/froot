@@ -53,3 +53,29 @@ def scan_workflow_id(repo: TargetRepo) -> str:
     return "-".join(
         ("froot-scan", _slug(repo.repo.owner), _slug(repo.repo.name))
     )
+
+
+def review_workflow_id(repo: TargetRepo) -> str:
+    """The deterministic per-repo determinism-review loop id (a singleton)."""
+    return "-".join(
+        ("froot-review", _slug(repo.repo.owner), _slug(repo.repo.name))
+    )
+
+
+def pr_review_workflow_id(
+    repo: TargetRepo, pr_number: int, head_sha: str
+) -> str:
+    """The deterministic per-(PR, head SHA) review id (the dispatch dedup key).
+
+    Keyed on the head SHA so a new commit triggers a fresh review, and
+    re-dispatch of the same commit is a no-op (REJECT_DUPLICATE).
+    """
+    return "-".join(
+        (
+            "froot-pr-review",
+            _slug(repo.repo.owner),
+            _slug(repo.repo.name),
+            _slug(str(pr_number)),
+            _slug(head_sha[:12]),
+        )
+    )

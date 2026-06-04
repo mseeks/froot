@@ -62,6 +62,17 @@ class Forge(Protocol):
         """Materialize the repo's default branch into ``workspace``."""
         ...
 
+    async def checkout_pull_request(
+        self, target: TargetRepo, workspace: Path, number: int
+    ) -> None:
+        """Materialize a PR's head into ``workspace`` via ``refs/pull/N/head``.
+
+        Works uniformly for same-repo and fork PRs — the base repo exposes the
+        head of every PR under ``refs/pull/<number>/head``, so no fork URL or
+        cross-repo auth is needed.
+        """
+        ...
+
     async def push_branch(
         self, workspace: Path, branch: BranchName, commit_message: str
     ) -> str:
@@ -79,6 +90,22 @@ class Forge(Protocol):
         self, target: TargetRepo, branch: BranchName
     ) -> PullRequestRef | None:
         """Return the open PR for ``branch`` if one already exists (dedup)."""
+        ...
+
+    async def list_open_pull_requests(
+        self, target: TargetRepo
+    ) -> tuple[PullRequestRef, ...]:
+        """List the repo's open PRs (the determinism reviewer's work feed)."""
+        ...
+
+    async def upsert_issue_comment(
+        self, target: TargetRepo, number: int, marker: str, body: str
+    ) -> str:
+        """Create or update the PR's ``marker``-tagged comment; return its URL.
+
+        Finds the existing comment containing ``marker`` and edits it in place,
+        else posts a new one — so re-reviewing a PR never stacks comments.
+        """
         ...
 
     async def open_pull_request(

@@ -20,19 +20,31 @@ from temporalio import activity
 from froot.domain.candidate import PatchCandidate
 from froot.domain.changelog import ChangelogVerdict, UnknownVerdict
 from froot.domain.ci import CIStatus
+from froot.domain.determinism import AnalysisResult, FrontierVerdict
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.repo import TargetRepo
 from froot.policy.candidates import select_patch_candidates
 from froot.policy.compose import PR_LABELS, pull_request_draft
-from froot.policy.naming import branch_name, bump_workflow_id
+from froot.policy.determinism import analyze_workflow_surface
+from froot.policy.naming import (
+    branch_name,
+    bump_workflow_id,
+    pr_review_workflow_id,
+)
+from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
 from froot.workflow.types import (
+    AdjudicateInput,
     CiCheckInput,
     DispatchInput,
+    DispatchReviewInput,
     OpenPrInput,
+    PostReviewInput,
+    PrReviewParams,
     RecordInput,
 )
 
 _log = logging.getLogger("froot.outcome")
+_review_log = logging.getLogger("froot.review")
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -151,3 +163,99 @@ async def dispatch_bump(params: DispatchInput) -> None:
         # This bump already has a loop (running or completed) — a no-op, so
         # re-scanning never opens a second PR for the same bump.
         return
+
+
+# ── The determinism reviewer (the transitive ring) ──────────────────────────
+@activity.defn
+async def list_review_prs(target: TargetRepo) -> tuple[PullRequestRef, ...]:
+    """List the repo's open PRs for the determinism reviewer to consider."""
+    from froot.adapters.github import GitHubForge
+
+    return await GitHubForge().list_open_pull_requests(target)
+
+
+@activity.defn
+async def dispatch_pr_review(params: DispatchReviewInput) -> None:
+    """Start a PR's determinism review (idempotent per PR + head SHA)."""
+    from temporalio.common import WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from froot.workflow.pr_review_workflow import PrReviewWorkflow
+    from froot.workflow.temporal_client import client, task_queue
+
+    temporal = await client()
+    try:
+        await temporal.start_workflow(
+            PrReviewWorkflow.run,
+            PrReviewParams(target=params.target, pr=params.pr),
+            id=pr_review_workflow_id(
+                params.target, params.pr.number, params.pr.head_sha
+            ),
+            task_queue=task_queue(),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        # This (PR, head SHA) already has a review — a no-op, so re-polling
+        # never double-reviews the same commit.
+        return
+
+
+@activity.defn
+async def analyze_pr(params: PrReviewParams) -> AnalysisResult:
+    """Check out the PR head and analyze the workflow surface for hazards."""
+    from froot.adapters.github import GitHubForge
+    from froot.adapters.source_tree import load_modules
+    from froot.config.settings import ReviewSettings
+
+    forge = GitHubForge()
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        await forge.checkout_pull_request(
+            params.target, workspace, params.pr.number
+        )
+        # The ASTs and source lines are read into memory here, so the analysis
+        # below is unaffected by the workspace being cleaned up.
+        modules = load_modules(workspace)
+    return analyze_workflow_surface(modules, max_depth=ReviewSettings().depth)
+
+
+@activity.defn
+async def adjudicate_frontier(
+    params: AdjudicateInput,
+) -> tuple[FrontierVerdict, ...]:
+    """Run the model over each frontier item; return aligned verdicts."""
+    from froot.adapters.determinism_judge import DeterminismFrontierJudge
+
+    judge = DeterminismFrontierJudge()
+    verdicts: list[FrontierVerdict] = []
+    for item in params.frontier:
+        verdicts.append(await judge.adjudicate(item))
+    return tuple(verdicts)
+
+
+@activity.defn
+async def post_review(params: PostReviewInput) -> str | None:
+    """Upsert the advisory comment (when there are findings); log the ledger."""
+    from froot.adapters.github import GitHubForge
+
+    body = render_review_comment(params.findings, params.pr.head_sha)
+    url: str | None = None
+    if body is not None:
+        url = await GitHubForge().upsert_issue_comment(
+            params.target, params.pr.number, REVIEW_MARKER, body
+        )
+    _review_log.info(
+        json.dumps(
+            {
+                "event": "loop_outcome",
+                "loop": "determinism-review",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "head_sha": params.pr.head_sha,
+                "findings": len(params.findings),
+                "rules": sorted({f.rule for f in params.findings}),
+                "comment_url": url,
+            }
+        )
+    )
+    return url
