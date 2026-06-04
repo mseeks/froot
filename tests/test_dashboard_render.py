@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 from froot.dashboard import read_model, render
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import ActivityStat, DashboardModel, RunTelemetry
-from froot.dashboard.temporal_source import ScanExecution
+from froot.dashboard.temporal_source import (
+    PrReviewExecution,
+    ReviewExecution,
+    ScanExecution,
+)
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 REPO = "mseeks/revisionist"
@@ -16,6 +20,8 @@ def _model(
     prs: Sequence[GithubPr] = (),
     scans: Sequence[ScanExecution] = (),
     telemetry: tuple[RunTelemetry, str | None] | None = None,
+    reviews: Sequence[ReviewExecution] = (),
+    pr_reviews: Sequence[PrReviewExecution] = (),
 ) -> DashboardModel:
     if telemetry is None:
         telemetry = (
@@ -33,8 +39,9 @@ def _model(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
+        review_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=((tuple(scans), ()), None),
+        temporal=((tuple(scans), (), tuple(reviews), tuple(pr_reviews)), None),
         telemetry=telemetry,
     )
 
@@ -149,3 +156,60 @@ def test_live_scan_loop_shows_a_repo_row():
     html = render.page(_model(scans=scans))
     assert REPO in html
     assert "next" in html  # the next-due hint for a live loop
+
+
+# ── Determinism review sections ──────────────────────────────────────────────
+def _review(status: str = "running") -> ReviewExecution:
+    return ReviewExecution(
+        workflow_id="froot-review-mseeks-revisionist",
+        status=status,
+        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
+    )
+
+
+def _pr_review(
+    pr: int,
+    findings: int,
+    rules: tuple[str, ...],
+    comment: str | None = None,
+) -> PrReviewExecution:
+    return PrReviewExecution(
+        workflow_id=f"froot-pr-review-mseeks-revisionist-{pr}-abc1234def56",
+        status="completed",
+        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
+        close=datetime(2026, 6, 3, 6, 1, tzinfo=UTC),
+        pr_number=pr,
+        head_sha="abc1234def56",
+        findings=findings,
+        rules=rules,
+        comment_url=comment,
+    )
+
+
+def test_page_shows_determinism_sections_with_empty_states():
+    html = render.page(_model())
+    assert "Determinism review" in html
+    assert "transitive ring" in html
+    assert "No determinism-review loops running" in html
+    assert "No PRs reviewed yet" in html
+
+
+def test_review_heartbeat_clears_empty_note_when_a_loop_is_live():
+    live = render.page(_model(reviews=[_review("running")]))
+    assert "No determinism-review loops running" not in live
+    assert "next" in live  # the next-due hint for the live review loop
+
+
+def test_flagged_review_renders_rule_count_and_comment_link():
+    comment = f"https://github.com/{REPO}/pull/7#issuecomment-1"
+    pr_reviews = [_pr_review(7, 1, ("datetime.datetime.now",), comment=comment)]
+    html = render.page(_model(pr_reviews=pr_reviews))
+    assert "datetime.datetime.now" in html
+    assert "1 hazard" in html
+    assert "#7" in html
+    assert comment in html  # the one-click comment link
+
+
+def test_clean_review_renders_clean_not_a_hazard():
+    html = render.page(_model(pr_reviews=[_pr_review(8, 0, ())]))
+    assert ">clean<" in html

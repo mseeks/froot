@@ -60,6 +60,33 @@ class BumpExecution(Frozen):
     reason: str | None
 
 
+class ReviewExecution(Frozen):
+    """One determinism-review-loop execution (several per id across CAN)."""
+
+    workflow_id: str
+    status: str
+    start: datetime | None
+
+
+class PrReviewExecution(Frozen):
+    """One per-PR determinism review, with its result (if completed).
+
+    The findings count + flagged rules + advisory comment come from the
+    ``PrReviewWorkflow`` result; the repo is recovered by the read-model from
+    the deterministic workflow id (it encodes the slug).
+    """
+
+    workflow_id: str
+    status: str
+    start: datetime | None
+    close: datetime | None
+    pr_number: int | None
+    head_sha: str | None
+    findings: int
+    rules: tuple[str, ...]
+    comment_url: str | None
+
+
 def _status(execution: WorkflowExecution) -> str:
     """Lowercase the Temporal status enum (``continued_as_new`` etc.)."""
     status = execution.status
@@ -156,13 +183,69 @@ async def _reason(client: Client, execution: WorkflowExecution) -> str | None:
         return None
 
 
-type _Ledger = tuple[tuple[ScanExecution, ...], tuple[BumpExecution, ...]]
+class _ReviewOutcome(Frozen):
+    """The bits of a completed review's result the read-model joins on."""
+
+    pr_number: int | None
+    head_sha: str | None
+    findings: int
+    rules: tuple[str, ...]
+    comment_url: str | None
+
+
+async def _review_outcome(
+    client: Client, execution: WorkflowExecution
+) -> _ReviewOutcome:
+    """A completed review's result (pr/head/findings/rules/comment)."""
+    empty = _ReviewOutcome(
+        pr_number=None, head_sha=None, findings=0, rules=(), comment_url=None
+    )
+    try:
+        handle = client.get_workflow_handle(
+            execution.id, run_id=execution.run_id
+        )
+        data = _as_dict(await handle.result())
+    except Exception:  # best-effort enrichment — a bad decode is never fatal
+        return empty
+    if data is None:
+        return empty
+    raw = data.get("findings")
+    findings = raw if isinstance(raw, list) else []
+    rules = tuple(
+        str(f["rule"])
+        for f in findings
+        if isinstance(f, dict) and isinstance(f.get("rule"), str)
+    )
+    number = data.get("pr_number")
+    head = data.get("head_sha")
+    comment = data.get("comment_url")
+    return _ReviewOutcome(
+        pr_number=number if isinstance(number, int) else None,
+        head_sha=head if isinstance(head, str) else None,
+        findings=len(findings),
+        rules=rules,
+        comment_url=comment if isinstance(comment, str) else None,
+    )
+
+
+type _Ledger = tuple[
+    tuple[ScanExecution, ...],
+    tuple[BumpExecution, ...],
+    tuple[ReviewExecution, ...],
+    tuple[PrReviewExecution, ...],
+]
 
 
 async def fetch(client: Client) -> tuple[_Ledger, str | None]:
-    """Read froot's scan + bump executions (degrades to an error string)."""
+    """Read froot's scan/bump + review executions (degrades to an error)."""
     scans: list[ScanExecution] = []
     bumps: list[BumpExecution] = []
+    reviews: list[ReviewExecution] = []
+    pr_reviews: list[PrReviewExecution] = []
+
+    def ledger() -> _Ledger:
+        return (tuple(scans), tuple(bumps), tuple(reviews), tuple(pr_reviews))
+
     try:
         async for execution in _take(
             client.list_workflows("WorkflowType = 'ScanWorkflow'")
@@ -200,9 +283,44 @@ async def fetch(client: Client) -> tuple[_Ledger, str | None]:
                     reason=reason,
                 )
             )
+        async for execution in _take(
+            client.list_workflows("WorkflowType = 'ReviewWorkflow'")
+        ):
+            reviews.append(
+                ReviewExecution(
+                    workflow_id=execution.id,
+                    status=_status(execution),
+                    start=execution.start_time,
+                )
+            )
+        async for execution in _take(
+            client.list_workflows("WorkflowType = 'PrReviewWorkflow'")
+        ):
+            review = _ReviewOutcome(
+                pr_number=None,
+                head_sha=None,
+                findings=0,
+                rules=(),
+                comment_url=None,
+            )
+            if execution.status is WorkflowExecutionStatus.COMPLETED:
+                review = await _review_outcome(client, execution)
+            pr_reviews.append(
+                PrReviewExecution(
+                    workflow_id=execution.id,
+                    status=_status(execution),
+                    start=execution.start_time,
+                    close=execution.close_time,
+                    pr_number=review.pr_number,
+                    head_sha=review.head_sha,
+                    findings=review.findings,
+                    rules=review.rules,
+                    comment_url=review.comment_url,
+                )
+            )
     except Exception as exc:  # degrade to an error string, never crash the page
-        return (tuple(scans), tuple(bumps)), f"{type(exc).__name__}: {exc}"
-    return (tuple(scans), tuple(bumps)), None
+        return ledger(), f"{type(exc).__name__}: {exc}"
+    return ledger(), None
 
 
 async def _take(

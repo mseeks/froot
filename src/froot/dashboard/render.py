@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from froot.dashboard.model import (
         BumpRow,
         DashboardModel,
+        ReviewLoop,
+        ReviewRow,
         RunTelemetry,
         ScanLoop,
     )
@@ -365,6 +367,92 @@ def _telemetry(model: DashboardModel) -> str:
     )
 
 
+def _review_heartbeat(model: DashboardModel) -> str:
+    now = model.generated_at
+    interval = model.review_interval_seconds
+
+    def line(loop: ReviewLoop) -> str:
+        if loop.live:
+            dot, tail = "ok", ""
+            if loop.last_tick is not None:
+                nxt = _aware(loop.last_tick) + timedelta(seconds=interval)
+                last = _ago(loop.last_tick, now)
+                tail = (
+                    f' <span class="mut">&middot; last {last}'
+                    f" &middot; next {_until(nxt, now)}</span>"
+                )
+        else:
+            dot = "bad" if loop.status in ("terminated", "none") else "warn"
+            tail = f' <span class="mut">&middot; {escape(loop.status)}</span>'
+        return (
+            f'<div class="row">{_dot(dot)}'
+            f'<span class="mono">{escape(loop.repo)}</span>{tail}</div>'
+        )
+
+    if not model.review_loops:
+        body = (
+            '<p class="note">No determinism-review loops running '
+            "(the transitive ring watches the @workflow.defn repos).</p>"
+        )
+    else:
+        body = "".join(line(loop) for loop in model.review_loops)
+    return (
+        "<section><h2>Determinism review &middot; is it alive?</h2>"
+        f"{body}</section>"
+    )
+
+
+def _review_record(model: DashboardModel) -> str:
+    r = model.review_record
+    stats = "".join(
+        (
+            _stat(r.reviewed, "reviewed"),
+            _stat(r.flagged, "flagged"),
+            _stat(r.clean, "clean"),
+            _stat(r.hazards, "hazards"),
+            _stat(r.repos_covered, "repos covered"),
+        )
+    )
+    note = (
+        '<p class="note">The transitive ring: it chases first-party helper '
+        "calls out of each workflow to catch a hazard the lexical CI kernel "
+        "can&rsquo;t see. <b>Advisory</b> &mdash; the blocking gate stays the "
+        "kernel&rsquo;s CI check. The hazard-resolved rate (was a flag gone on "
+        "a later commit?) is a later loop; it needs accumulated history.</p>"
+    )
+    return (
+        "<section><h2>Determinism review &middot; the transitive ring</h2>"
+        f'<div class="stats">{stats}</div>{note}</section>'
+    )
+
+
+def _reviews(model: DashboardModel) -> str:
+    now = model.generated_at
+    if not model.reviews:
+        body = '<p class="note">No PRs reviewed yet.</p>'
+    else:
+        rows = "".join(
+            "<tr>"
+            f'<td class="mono">{escape(row.repo)}</td>'
+            f"<td>{_review_pr_link(row)}</td>"
+            f'<td class="mono mut">{escape((row.head_sha or "")[:7]) or "—"}'
+            "</td>"
+            f"<td>{_findings_cell(row)}</td>"
+            f'<td class="mut">{escape(_ago(row.reviewed_at, now))}</td>'
+            "</tr>"
+            for row in model.reviews
+        )
+        body = (
+            "<table><thead><tr><th>repo</th><th>pr</th><th>head</th>"
+            "<th>findings</th><th>reviewed</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    return (
+        "<section><h2>Determinism reviews &middot; the detail</h2>"
+        f"{body}</section>"
+    )
+
+
 def _footer() -> str:
     return (
         "<footer>"
@@ -386,6 +474,30 @@ def _pr_link(row: BumpRow) -> str:
     if row.pr_url is None or row.pr_number is None:
         return '<span class="mut">—</span>'
     return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
+
+
+def _review_pr_link(row: ReviewRow) -> str:
+    if row.pr_url is None or row.pr_number is None:
+        return '<span class="mut">—</span>'
+    return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
+
+
+def _findings_cell(row: ReviewRow) -> str:
+    """A review's findings: 'clean', or the hazard count + rules + comment."""
+    if row.findings == 0:
+        return '<span class="ok">clean</span>'
+    rules = (
+        f' <span class="mono mut">{escape(", ".join(row.rules))}</span>'
+        if row.rules
+        else ""
+    )
+    comment = (
+        f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
+        if row.comment_url
+        else ""
+    )
+    noun = "hazard" if row.findings == 1 else "hazards"
+    return f'<span class="bad">{row.findings} {noun}</span>{rules}{comment}'
 
 
 def _state_tag(state: str) -> str:
@@ -417,6 +529,9 @@ def page(model: DashboardModel) -> str:
         _gate(model),
         _bumps(model),
         _failures(model),
+        _review_heartbeat(model),
+        _review_record(model),
+        _reviews(model),
         _telemetry(model),
         _footer(),
     )
