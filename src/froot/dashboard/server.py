@@ -17,7 +17,11 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
-from froot.config.settings import DashboardSettings, Settings
+from froot.config.settings import (
+    DashboardSettings,
+    ReviewSettings,
+    Settings,
+)
 from froot.dashboard import (
     clickhouse_source,
     github_source,
@@ -35,6 +39,7 @@ _READ_TIMEOUT: Final = 15.0
 _MAX_HEAD_BYTES: Final = 64 * 1024
 # Settings' own default, repeated here so a missing FROOT_REPOS still renders.
 _DEFAULT_INTERVAL: Final = 86_400
+_DEFAULT_REVIEW_INTERVAL: Final = 300
 
 
 def _config() -> tuple[tuple[str, ...], int]:
@@ -45,6 +50,14 @@ def _config() -> tuple[tuple[str, ...], int]:
         return (), _DEFAULT_INTERVAL
     repos = tuple(target.repo.slug for target in settings.repos)
     return repos, settings.scan_interval_seconds
+
+
+def _review_interval() -> int:
+    """The determinism-review poll cadence, degrading to the default."""
+    try:
+        return ReviewSettings().poll_interval_seconds
+    except Exception:  # never let a config read fail the page
+        return _DEFAULT_REVIEW_INTERVAL
 
 
 async def build_html(client: Client) -> str:
@@ -60,6 +73,7 @@ async def build_html(client: Client) -> str:
         now=now,
         repos=repos,
         scan_interval_seconds=interval,
+        review_interval_seconds=_review_interval(),
         github=github_result,
         temporal=temporal_result,
         telemetry=telemetry_result,

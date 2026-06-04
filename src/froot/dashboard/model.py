@@ -202,6 +202,72 @@ class Judgment(Frozen):
     flagged_but_passed: int
 
 
+class ReviewLoop(Frozen):
+    """Liveness of one repo's determinism-review loop (the transitive ring).
+
+    Attributes:
+        repo: The ``owner/name`` slug this loop reviews.
+        status: The review workflow status (``running`` /
+            ``continued_as_new`` / ``terminated`` / ...), lowercased.
+        live: True when the loop is actively self-scheduling.
+        last_tick: When the current review execution started (≈ the last tick),
+            or ``None`` if no review workflow exists for the repo.
+    """
+
+    repo: str
+    status: str
+    live: bool
+    last_tick: datetime | None
+
+
+class ReviewRow(Frozen):
+    """One per-PR determinism review, from its ``PrReviewWorkflow`` result.
+
+    Attributes:
+        repo: The ``owner/name`` slug the PR belongs to.
+        pr_number: The reviewed PR number, if known.
+        pr_url: The PR's web URL, if it can be formed.
+        head_sha: The head commit the review ran against.
+        findings: How many transitive hazards the review surfaced.
+        rules: The distinct banned calls flagged (``datetime.datetime.now``…).
+        comment_url: The advisory comment's URL, if one was posted.
+        status: The review workflow status (``completed`` / ``running`` / ...).
+        reviewed_at: When the review closed, or started if still running.
+    """
+
+    repo: str
+    pr_number: int | None
+    pr_url: str | None
+    head_sha: str | None
+    findings: int
+    rules: tuple[str, ...]
+    comment_url: str | None
+    status: str
+    reviewed_at: datetime | None
+
+
+class ReviewRecord(Frozen):
+    """The determinism reviewer's headline, derived from completed reviews.
+
+    The hazard-resolved rate (was a flagged hazard gone on a later commit?) is
+    a later addition — it needs accumulated cross-commit history, so it is not
+    here yet.
+
+    Attributes:
+        reviewed: Completed per-PR reviews in the recent window.
+        flagged: Reviews that surfaced at least one hazard.
+        clean: Reviews that surfaced none.
+        hazards: Total hazards surfaced across all reviews.
+        repos_covered: Distinct repos with a live review loop.
+    """
+
+    reviewed: int
+    flagged: int
+    clean: int
+    hazards: int
+    repos_covered: int
+
+
 class DashboardModel(Frozen):
     """The whole 10,000ft view, fully derived and ready to render.
 
@@ -217,6 +283,10 @@ class DashboardModel(Frozen):
         gate: Open PRs awaiting a human, the freshest last.
         bumps: Every proposed bump, newest first (the detail behind the stats).
         failures: Bump loops that did not close.
+        review_interval_seconds: The configured gap between review poll ticks.
+        review_loops: Liveness of each Temporal repo's determinism-review loop.
+        review_record: The determinism reviewer's headline.
+        reviews: Every per-PR determinism review, newest first.
         telemetry: Trace-derived run telemetry (best-effort).
     """
 
@@ -231,4 +301,8 @@ class DashboardModel(Frozen):
     gate: tuple[BumpRow, ...]
     bumps: tuple[BumpRow, ...]
     failures: tuple[Failure, ...]
+    review_interval_seconds: int
+    review_loops: tuple[ReviewLoop, ...]
+    review_record: ReviewRecord
+    reviews: tuple[ReviewRow, ...]
     telemetry: RunTelemetry

@@ -18,6 +18,9 @@ from froot.dashboard.model import (
     DashboardModel,
     Failure,
     Judgment,
+    ReviewLoop,
+    ReviewRecord,
+    ReviewRow,
     RunTelemetry,
     ScanLoop,
     SourceHealth,
@@ -25,14 +28,19 @@ from froot.dashboard.model import (
     Verification,
 )
 from froot.domain.repo import RepoRef, TargetRepo
-from froot.policy.naming import scan_workflow_id
+from froot.policy.naming import review_workflow_id, scan_workflow_id
 from froot.result import Ok
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from froot.dashboard.github_source import GithubPr
-    from froot.dashboard.temporal_source import BumpExecution, ScanExecution
+    from froot.dashboard.temporal_source import (
+        BumpExecution,
+        PrReviewExecution,
+        ReviewExecution,
+        ScanExecution,
+    )
 
 _LIVE_STATUSES = frozenset({"running", "continued_as_new"})
 # Every way a bump can end without closing cleanly — all belong in the honest
@@ -251,6 +259,113 @@ def _failures(bumps: tuple[BumpExecution, ...]) -> tuple[Failure, ...]:
     return tuple(failures)
 
 
+def _review_id(repo: str) -> str | None:
+    """The deterministic review-loop id for an ``owner/name`` slug, if valid."""
+    match RepoRef.parse(repo):
+        case Ok(ref):
+            return review_workflow_id(TargetRepo(repo=ref))
+        case _:
+            return None
+
+
+def _pr_review_prefix(repo: str) -> str | None:
+    """The id prefix every per-PR review of ``repo`` shares (the join key)."""
+    review_id = _review_id(repo)
+    if review_id is None:
+        return None
+    # froot-review-<slug> -> froot-pr-review-<slug>- ; the pr/sha tail follows.
+    return "froot-pr-review-" + review_id.removeprefix("froot-review-") + "-"
+
+
+def _attribute_repo(workflow_id: str, repos: tuple[str, ...]) -> str | None:
+    """The configured repo a per-PR-review id belongs to (longest prefix)."""
+    best: str | None = None
+    best_len = -1
+    for repo in repos:
+        prefix = _pr_review_prefix(repo)
+        if prefix and workflow_id.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = repo, len(prefix)
+    return best
+
+
+def _review_loops(
+    repos: tuple[str, ...], reviews: tuple[ReviewExecution, ...]
+) -> tuple[ReviewLoop, ...]:
+    """One liveness row per repo that actually has a review loop.
+
+    Reviews are scoped to the Temporal repos, so a configured npm repo with no
+    review loop is omitted rather than shown as a dead one.
+    """
+    by_id: dict[str, ReviewExecution] = {}
+    for review in reviews:
+        current = by_id.get(review.workflow_id)
+        if current is None or _newer(review.start, current.start):
+            by_id[review.workflow_id] = review
+    loops: list[ReviewLoop] = []
+    for repo in repos:
+        review_id = _review_id(repo)
+        execution = by_id.get(review_id) if review_id is not None else None
+        if execution is None:
+            continue
+        loops.append(
+            ReviewLoop(
+                repo=repo,
+                status=execution.status,
+                live=execution.status in _LIVE_STATUSES,
+                last_tick=execution.start,
+            )
+        )
+    return tuple(loops)
+
+
+def _review_rows(
+    pr_reviews: tuple[PrReviewExecution, ...], repos: tuple[str, ...]
+) -> tuple[ReviewRow, ...]:
+    """Project each per-PR review into a row, newest review first."""
+    rows: list[ReviewRow] = []
+    for execution in pr_reviews:
+        repo = _attribute_repo(execution.workflow_id, repos)
+        pr_url = (
+            f"https://github.com/{repo}/pull/{execution.pr_number}"
+            if repo is not None and execution.pr_number is not None
+            else None
+        )
+        rows.append(
+            ReviewRow(
+                repo=repo or "?",
+                pr_number=execution.pr_number,
+                pr_url=pr_url,
+                head_sha=execution.head_sha,
+                findings=execution.findings,
+                rules=execution.rules,
+                comment_url=execution.comment_url,
+                status=execution.status,
+                reviewed_at=execution.close or execution.start,
+            )
+        )
+    rows.sort(
+        key=lambda r: r.reviewed_at.timestamp() if r.reviewed_at else 0.0,
+        reverse=True,
+    )
+    return tuple(rows)
+
+
+def _review_record(
+    loops: tuple[ReviewLoop, ...], rows: tuple[ReviewRow, ...]
+) -> ReviewRecord:
+    """Counts over the completed reviews (resolved-rate is a later loop)."""
+    completed = [r for r in rows if r.status == "completed"]
+    flagged = sum(1 for r in completed if r.findings > 0)
+    hazards = sum(r.findings for r in completed)
+    return ReviewRecord(
+        reviewed=len(completed),
+        flagged=flagged,
+        clean=len(completed) - flagged,
+        hazards=hazards,
+        repos_covered=len(loops),
+    )
+
+
 def _sources(
     github_error: str | None,
     github_count: int,
@@ -290,18 +405,27 @@ def assemble(
     now: datetime,
     repos: tuple[str, ...],
     scan_interval_seconds: int,
+    review_interval_seconds: int,
     github: tuple[tuple[GithubPr, ...], str | None],
     temporal: tuple[
-        tuple[tuple[ScanExecution, ...], tuple[BumpExecution, ...]], str | None
+        tuple[
+            tuple[ScanExecution, ...],
+            tuple[BumpExecution, ...],
+            tuple[ReviewExecution, ...],
+            tuple[PrReviewExecution, ...],
+        ],
+        str | None,
     ],
     telemetry: tuple[RunTelemetry, str | None],
 ) -> DashboardModel:
     """Build the whole view from the readers' ``(data, error)`` outputs."""
     prs, github_error = github
-    (scans, bumps), temporal_error = temporal
+    (scans, bumps, reviews, pr_reviews), temporal_error = temporal
     run_telemetry, clickhouse_error = telemetry
 
     rows = _bump_rows(now, prs, bumps)
+    review_loops = _review_loops(repos, reviews)
+    review_rows = _review_rows(pr_reviews, repos)
     return DashboardModel(
         generated_at=now,
         repos_configured=repos,
@@ -310,7 +434,7 @@ def assemble(
             github_error,
             len(prs),
             temporal_error,
-            len(scans) + len(bumps),
+            len(scans) + len(bumps) + len(reviews) + len(pr_reviews),
             run_telemetry,
             clickhouse_error,
         ),
@@ -321,5 +445,9 @@ def assemble(
         gate=_gate(rows),
         bumps=rows,
         failures=_failures(bumps),
+        review_interval_seconds=review_interval_seconds,
+        review_loops=review_loops,
+        review_record=_review_record(review_loops, review_rows),
+        reviews=review_rows,
         telemetry=run_telemetry,
     )

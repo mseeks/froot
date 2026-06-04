@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 from froot.dashboard import read_model
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import DashboardModel, RunTelemetry
-from froot.dashboard.temporal_source import BumpExecution, ScanExecution
+from froot.dashboard.temporal_source import (
+    BumpExecution,
+    PrReviewExecution,
+    ReviewExecution,
+    ScanExecution,
+)
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 REPO = "mseeks/revisionist"
@@ -76,13 +81,24 @@ def _assemble(
     prs: list[GithubPr],
     scans: list[ScanExecution],
     bumps: list[BumpExecution],
+    reviews: list[ReviewExecution] | None = None,
+    pr_reviews: list[PrReviewExecution] | None = None,
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
+        review_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=((tuple(scans), tuple(bumps)), None),
+        temporal=(
+            (
+                tuple(scans),
+                tuple(bumps),
+                tuple(reviews or ()),
+                tuple(pr_reviews or ()),
+            ),
+            None,
+        ),
         telemetry=_telemetry_off(),
     )
 
@@ -284,8 +300,9 @@ def test_source_health_reflects_errors():
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
+        review_interval_seconds=300,
         github=((), "boom"),
-        temporal=(((), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     health = {s.name: s for s in model.sources}
@@ -293,3 +310,81 @@ def test_source_health_reflects_errors():
     assert health["github"].detail == "boom"
     assert health["temporal"].ok is True
     assert health["clickhouse"].ok is False  # "off"
+
+
+# ── Determinism review loop ──────────────────────────────────────────────────
+def _review(status: str = "running") -> ReviewExecution:
+    return ReviewExecution(
+        workflow_id="froot-review-mseeks-revisionist",
+        status=status,
+        start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
+    )
+
+
+def _pr_review(
+    pr: int,
+    *,
+    status: str = "completed",
+    findings: int = 0,
+    rules: tuple[str, ...] = (),
+    head: str = "abc1234def56",
+) -> PrReviewExecution:
+    return PrReviewExecution(
+        workflow_id=f"froot-pr-review-mseeks-revisionist-{pr}-{head}",
+        status=status,
+        start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
+        close=datetime(2026, 6, 3, 11, 51, tzinfo=UTC),
+        pr_number=pr,
+        head_sha=head,
+        findings=findings,
+        rules=rules,
+        comment_url=None,
+    )
+
+
+def test_review_loop_live_when_running():
+    model = _assemble([], [], [], reviews=[_review("running")])
+    assert len(model.review_loops) == 1
+    assert model.review_loops[0].repo == REPO
+    assert model.review_loops[0].live is True
+
+
+def test_review_loop_omitted_when_no_execution():
+    # Reviews are scoped to the Temporal repos; a repo with no review loop is
+    # left out, not shown as a dead one (unlike the scan heartbeat).
+    assert _assemble([], [], []).review_loops == ()
+
+
+def test_review_record_counts_findings_clean_and_hazards():
+    pr_reviews = [
+        _pr_review(
+            1, findings=2, rules=("datetime.datetime.now", "random.random")
+        ),
+        _pr_review(2, findings=0),
+        _pr_review(3, findings=1, rules=("time.time",)),
+    ]
+    model = _assemble([], [], [], reviews=[_review()], pr_reviews=pr_reviews)
+    r = model.review_record
+    assert (r.reviewed, r.flagged, r.clean, r.hazards) == (3, 2, 1, 3)
+    assert r.repos_covered == 1
+
+
+def test_review_row_attributes_repo_and_pr_url():
+    model = _assemble(
+        [], [], [], pr_reviews=[_pr_review(7, findings=1, rules=("time.time",))]
+    )
+    row = model.reviews[0]
+    assert row.repo == REPO
+    assert row.pr_url == f"https://github.com/{REPO}/pull/7"
+    assert row.pr_number == 7
+    assert row.rules == ("time.time",)
+
+
+def test_review_record_ignores_incomplete_reviews():
+    pr_reviews = [
+        _pr_review(1, status="running", findings=0),
+        _pr_review(2, status="completed", findings=1, rules=("time.time",)),
+    ]
+    model = _assemble([], [], [], pr_reviews=pr_reviews)
+    assert model.review_record.reviewed == 1  # only the completed one
+    assert model.review_record.flagged == 1
