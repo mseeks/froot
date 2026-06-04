@@ -165,6 +165,29 @@ class GitHubForge:
         if code != 0:
             raise RuntimeError(f"git clone failed ({code}): {out}")
 
+    async def checkout_pull_request(
+        self, target: TargetRepo, workspace: Path, number: int
+    ) -> None:
+        """Materialize a PR's head into ``workspace`` via ``refs/pull/N/head``.
+
+        Fetches the PR head ref the base repo exposes for every PR (fork or
+        not), so a community PR from a fork checks out the same way a same-repo
+        one does — no fork URL, no cross-repo auth.
+        """
+        ref = f"pull/{number}/head"
+        steps: tuple[tuple[str, ...], ...] = (
+            ("git", "init", "-q"),
+            ("git", "remote", "add", "origin", _auth_remote(target)),
+            ("git", "fetch", "--depth", "1", "origin", ref),
+            ("git", "checkout", "-q", "FETCH_HEAD"),
+        )
+        for step in steps:
+            code, out = await run_text(*step, cwd=workspace)
+            if code != 0:
+                raise RuntimeError(
+                    f"git {step[1]} ({ref}) failed ({code}): {out}"
+                )
+
     async def push_branch(
         self, workspace: Path, branch: BranchName, commit_message: str
     ) -> str:
@@ -210,6 +233,21 @@ class GitHubForge:
         if isinstance(payloads, list) and payloads:
             return _pull_request_ref(payloads[0])
         return None
+
+    async def list_open_pull_requests(
+        self, target: TargetRepo
+    ) -> tuple[PullRequestRef, ...]:
+        """List the repo's open PRs (the determinism reviewer's work feed)."""
+        async with _client() as client:
+            resp = await client.get(
+                f"/repos/{target.repo.slug}/pulls",
+                params={"state": "open", "per_page": 100},
+            )
+        _raise_for_status(resp)
+        payloads = resp.json()
+        if not isinstance(payloads, list):
+            return ()
+        return tuple(_pull_request_ref(payload) for payload in payloads)
 
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft
@@ -274,3 +312,40 @@ class GitHubForge:
                 json={"labels": list(labels)},
             )
         _raise_for_status(resp)
+
+    async def upsert_issue_comment(
+        self, target: TargetRepo, number: int, marker: str, body: str
+    ) -> str:
+        """Create or update the PR's ``marker``-tagged comment; return its URL.
+
+        A PR conversation (issue) comment, not an inline review comment: the
+        determinism findings are structural (a call path), so a single advisory
+        summary fits better than line anchors. The marker lets a re-review edit
+        its own prior comment in place rather than stack a new one.
+        """
+        slug = target.repo.slug
+        async with _client() as client:
+            listing = await client.get(
+                f"/repos/{slug}/issues/{number}/comments",
+                params={"per_page": 100},
+            )
+            _raise_for_status(listing)
+            existing_id: int | None = None
+            for comment in listing.json():
+                if isinstance(comment, dict) and marker in str(
+                    comment.get("body", "")
+                ):
+                    existing_id = int(comment["id"])
+                    break
+            if existing_id is not None:
+                resp = await client.patch(
+                    f"/repos/{slug}/issues/comments/{existing_id}",
+                    json={"body": body},
+                )
+            else:
+                resp = await client.post(
+                    f"/repos/{slug}/issues/{number}/comments",
+                    json={"body": body},
+                )
+        _raise_for_status(resp)
+        return str(resp.json()["html_url"])

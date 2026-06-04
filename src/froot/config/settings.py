@@ -192,3 +192,35 @@ class DashboardSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return True
         return value
+
+
+class ReviewSettings(BaseSettings):
+    """The determinism-reviewer loop (``FROOT_REVIEW_*``).
+
+    The transitive ring: a per-repo loop that polls open PRs and leaves an
+    advisory comment when a workflow reaches a determinism hazard through a
+    first-party helper (``depth`` call levels) or a risky third-party import.
+    Advisory only — the blocking gate is the kernel's ``Determinism`` CI check.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_REVIEW_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    enabled: bool = True
+    # PRs merge fast, but this loop is advisory (not a gate), so a little
+    # latency is fine — it never needs to win the merge race.
+    poll_interval_seconds: int = Field(default=300, gt=0)
+    # How many first-party call levels to chase out of each workflow method.
+    depth: int = Field(default=2, ge=1, le=4)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_is_on(cls, value: object) -> object:
+        """Treat an empty/whitespace value as the default (on), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return True
+        return value

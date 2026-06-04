@@ -82,16 +82,25 @@ class FakeForge:
         existing_pr: PullRequestRef | None = None,
         opened_pr: PullRequestRef | None = None,
         ci: CIStatus | None = None,
+        open_prs: tuple[PullRequestRef, ...] = (),
     ) -> None:
         self.existing_pr = existing_pr
         self.opened_pr = opened_pr or make_pr()
         self.ci: CIStatus = ci or CIPassed()
+        self.open_prs = open_prs
         self.checked_out = False
+        self.checked_out_pr: int | None = None
         self.pushed: BranchName | None = None
         self.labeled: tuple[str, ...] | None = None
+        self.upserted: tuple[int, str] | None = None
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         self.checked_out = True
+
+    async def checkout_pull_request(
+        self, target: TargetRepo, workspace: Path, number: int
+    ) -> None:
+        self.checked_out_pr = number
 
     async def push_branch(
         self, workspace: Path, branch: BranchName, commit_message: str
@@ -103,6 +112,17 @@ class FakeForge:
         self, target: TargetRepo, branch: BranchName
     ) -> PullRequestRef | None:
         return self.existing_pr
+
+    async def list_open_pull_requests(
+        self, target: TargetRepo
+    ) -> tuple[PullRequestRef, ...]:
+        return self.open_prs
+
+    async def upsert_issue_comment(
+        self, target: TargetRepo, number: int, marker: str, body: str
+    ) -> str:
+        self.upserted = (number, body)
+        return f"https://github.com/{target.repo.slug}/pull/{number}#comment"
 
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft
