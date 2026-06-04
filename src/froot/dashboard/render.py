@@ -62,6 +62,36 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 footer{margin:44px 0 0;padding-top:16px;border-top:1px solid var(--line);
 color:var(--mut);font-size:12px;line-height:1.7}
 footer b{color:var(--fg);font-weight:600}
+/* loop groups — collapsible (collapsed by default), two-level hierarchy */
+details.loop{margin:24px 0 0}
+summary.loophead{display:flex;align-items:baseline;gap:6px 12px;flex-wrap:wrap;
+cursor:pointer;list-style:none;margin:0;padding:0 0 7px;
+border-bottom:2px solid var(--fg)}
+summary.loophead::-webkit-details-marker{display:none}
+summary.loophead::before{content:"\\25B8";color:var(--mut);margin-right:5px;
+font-size:11px;position:relative;top:-1px}
+details.loop[open]>summary.loophead::before{content:"\\25BE"}
+summary.loophead h2{font-size:16px;text-transform:none;letter-spacing:-.01em;
+color:var(--fg);border:0;margin:0;padding:0;font-weight:700}
+summary.loophead .sub{color:var(--mut);font-size:12px}
+summary.loophead .glance{margin-left:auto;display:flex;flex-wrap:wrap;
+align-items:baseline;gap:3px 14px;font-size:12px;color:var(--mut)}
+summary.loophead .glance b{color:var(--fg);font-weight:600}
+/* the shared-infra group reads as not-a-loop: lighter, dashed, muted */
+details.loop.shared>summary.loophead{border-bottom:1px dashed var(--line)}
+details.loop.shared>summary.loophead h2{font-size:13px;color:var(--mut);
+font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+/* subsections sit tighter inside a loop; the loop rule carries the weight */
+details.loop section{margin:18px 0 0}
+details.loop section>h2{border-bottom:0;padding-bottom:0;margin-bottom:9px}
+/* foldable framing — the MHE notes, one click away, so the page scans clean */
+details.why{margin:9px 0 0}
+details.why>summary{color:var(--accent);font-size:12px;cursor:pointer;
+list-style:none}
+details.why>summary::-webkit-details-marker{display:none}
+details.why>summary::before{content:"\\002b  why";font-weight:600}
+details.why[open]>summary::before{content:"\\2212  why"}
+details.why .note{margin:6px 0 0}
 """
 
 _CI_CLASS = {
@@ -126,6 +156,16 @@ def _stat(n: object, label: str) -> str:
     )
 
 
+def _why(note_html: str) -> str:
+    """Fold a framing note behind a native ``<details>`` so the page scans."""
+    return f'<details class="why"><summary></summary>{note_html}</details>'
+
+
+def _glance(n: object, label: str) -> str:
+    """One at-a-glance item for a loop header (``<b>12</b> proposed``)."""
+    return f"<span><b>{escape(str(n))}</b> {escape(label)}</span>"
+
+
 def _header(model: DashboardModel) -> str:
     now = model.generated_at
     repos = ", ".join(model.repos_configured) or "none configured"
@@ -174,7 +214,7 @@ def _heartbeat(model: DashboardModel) -> str:
         body = '<p class="note">No repos configured (FROOT_REPOS unset).</p>'
     else:
         body = "".join(line(loop) for loop in model.scan_loops)
-    return f"<section><h2>Is the loop alive?</h2>{body}</section>"
+    return f"<section><h2>Is it alive?</h2>{body}</section>"
 
 
 def _track_record(model: DashboardModel) -> str:
@@ -203,7 +243,7 @@ def _track_record(model: DashboardModel) -> str:
     )
     return (
         "<section><h2>Track record &middot; the reputation</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
+        f'<div class="stats">{stats}</div>{_why(note)}</section>'
     )
 
 
@@ -221,7 +261,7 @@ def _verification(model: DashboardModel) -> str:
     if v.with_reading == 0:
         note = '<p class="note">No CI readings yet.</p>'
     else:
-        note = (
+        note = _why(
             f'<p class="note">A real oracle reported on '
             f"<b>{v.oracle_existed}</b> of {v.with_reading} bumps with a "
             'reading. <span class="mut">&lsquo;no checks&rsquo; means CI was '
@@ -257,7 +297,7 @@ def _judgment(model: DashboardModel) -> str:
         )
     return (
         "<section><h2>Model judgment &middot; the one model call</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
+        f'<div class="stats">{stats}</div>{_why(note)}</section>'
     )
 
 
@@ -330,11 +370,20 @@ def _failures(model: DashboardModel) -> str:
     )
 
 
+def _telem_glance(model: DashboardModel) -> str:
+    """The telemetry group's at-a-glance (or an ``unavailable`` marker)."""
+    t = model.telemetry
+    if not t.available:
+        return '<span class="mut">unavailable</span>'
+    return _glance(t.total_spans, f"spans / {t.window_days}d")
+
+
 def _telemetry(model: DashboardModel) -> str:
+    """The telemetry body — header lives in the shared loop group above it."""
     t: RunTelemetry = model.telemetry
     if not t.available:
         return (
-            "<section><h2>Run telemetry &middot; ClickHouse</h2>"
+            "<section>"
             '<p class="note">Unavailable (not configured or unreachable). '
             "GitHub + Temporal carry the dashboard regardless.</p></section>"
         )
@@ -361,10 +410,7 @@ def _telemetry(model: DashboardModel) -> str:
         f"{escape(_ago(t.last_activity, now))} &middot; "
         f"{t.window_days}-day window.</p>"
     )
-    return (
-        "<section><h2>Run telemetry &middot; ClickHouse</h2>"
-        f"{summary}{table}</section>"
-    )
+    return f"<section>{summary}{table}</section>"
 
 
 def _review_heartbeat(model: DashboardModel) -> str:
@@ -396,10 +442,7 @@ def _review_heartbeat(model: DashboardModel) -> str:
         )
     else:
         body = "".join(line(loop) for loop in model.review_loops)
-    return (
-        "<section><h2>Determinism review &middot; is it alive?</h2>"
-        f"{body}</section>"
-    )
+    return f"<section><h2>Is it alive?</h2>{body}</section>"
 
 
 def _review_record(model: DashboardModel) -> str:
@@ -421,8 +464,8 @@ def _review_record(model: DashboardModel) -> str:
         "a later commit?) is a later loop; it needs accumulated history.</p>"
     )
     return (
-        "<section><h2>Determinism review &middot; the transitive ring</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
+        "<section><h2>Track record &middot; the reputation</h2>"
+        f'<div class="stats">{stats}</div>{_why(note)}</section>'
     )
 
 
@@ -447,10 +490,7 @@ def _reviews(model: DashboardModel) -> str:
             "<th>findings</th><th>reviewed</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
-    return (
-        "<section><h2>Determinism reviews &middot; the detail</h2>"
-        f"{body}</section>"
-    )
+    return f"<section><h2>Reviews &middot; the detail</h2>{body}</section>"
 
 
 def _footer() -> str:
@@ -518,21 +558,94 @@ def _short_id(workflow_id: str) -> str:
     return workflow_id.removeprefix("froot-bump-")
 
 
+def _dep_glance(model: DashboardModel) -> str:
+    """The dependency-patch loop's at-a-glance, shown in its header."""
+    t = model.track_record
+    live = sum(1 for loop in model.scan_loops if loop.live)
+    total = len(model.scan_loops)
+    rate = "—" if t.merge_rate is None else f"{t.merge_rate * 100:.0f}%"
+    items = [
+        _glance(f"{live}/{total}", "live"),
+        _glance(t.opened, "proposed"),
+        _glance(rate, "merged"),
+    ]
+    if t.open_now:
+        items.append(_glance(t.open_now, "awaiting you"))
+    return "".join(items)
+
+
+def _det_glance(model: DashboardModel) -> str:
+    """The determinism-review loop's at-a-glance, shown in its header."""
+    r = model.review_record
+    return "".join(
+        (
+            _glance(r.repos_covered, "repos"),
+            _glance(r.reviewed, "reviewed"),
+            _glance(r.hazards, "hazards"),
+        )
+    )
+
+
+def _loop(
+    title: str,
+    sub: str,
+    glance: str,
+    sections: tuple[str, ...],
+    *,
+    shared: bool = False,
+) -> str:
+    """A collapsible group: a prominent header + at-a-glance, collapsed.
+
+    The header (with its at-a-glance) is the ``<summary>``, so a collapsed group
+    still shows the headline; expanding reveals the subsections. ``shared`` is a
+    non-loop infra group (telemetry) with a lighter, distinct header.
+    """
+    cls = "loop shared" if shared else "loop"
+    head = (
+        '<summary class="loophead">'
+        f"<h2>{escape(title)}</h2>"
+        f'<span class="sub">{sub}</span>'
+        f'<span class="glance">{glance}</span>'
+        "</summary>"
+    )
+    return f'<details class="{cls}">{head}{"".join(sections)}</details>'
+
+
 def page(model: DashboardModel) -> str:
     """Render the whole dashboard as one self-contained HTML document."""
     parts = (
         _header(model),
-        _heartbeat(model),
-        _track_record(model),
-        _verification(model),
-        _judgment(model),
-        _gate(model),
-        _bumps(model),
-        _failures(model),
-        _review_heartbeat(model),
-        _review_record(model),
-        _reviews(model),
-        _telemetry(model),
+        _loop(
+            "Dependency-patch",
+            "npm + uv &middot; scan &rarr; bump &rarr; CI &rarr; merge",
+            _dep_glance(model),
+            (
+                _heartbeat(model),
+                _track_record(model),
+                _verification(model),
+                _judgment(model),
+                _gate(model),
+                _bumps(model),
+                _failures(model),
+            ),
+        ),
+        _loop(
+            "Determinism review",
+            "the transitive ring &middot; advisory",
+            _det_glance(model),
+            (
+                _review_heartbeat(model),
+                _review_record(model),
+                _reviews(model),
+            ),
+        ),
+        _loop(
+            "Run telemetry",
+            "ClickHouse &middot; trace-derived, best-effort",
+            _telem_glance(model),
+            (_telemetry(model),),
+            shared=True,
+        ),
         _footer(),
     )
     return (

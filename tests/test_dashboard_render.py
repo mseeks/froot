@@ -73,11 +73,13 @@ def test_page_shows_the_headline_sections_and_authority_footer():
     html = render.page(_model())
     for needle in (
         "froot",
-        "Is the loop alive?",
+        "Dependency-patch",  # the loop-group header
+        "Is it alive?",
         "Track record",
         "Verification",
         "Model judgment",
         "Approval gate",
+        "Determinism review",  # the second loop-group header
         "Authority envelope",
         "derived live",
     ):
@@ -213,3 +215,28 @@ def test_flagged_review_renders_rule_count_and_comment_link():
 def test_clean_review_renders_clean_not_a_hazard():
     html = render.page(_model(pr_reviews=[_pr_review(8, 0, ())]))
     assert ">clean<" in html
+
+
+# ── Hierarchy: two loop groups, at-a-glance, foldable framing ─────────────────
+def test_sections_are_grouped_into_collapsible_loops():
+    html = render.page(_model())
+    # two loops, each a collapsible <details> collapsed by default (no `open`)
+    assert html.count('<details class="loop">') == 2
+    # telemetry is its own differentiated "shared" group, not part of a loop
+    assert html.count('<details class="loop shared">') == 1
+    assert html.count('class="loophead"') == 3
+    for title in ("Dependency-patch", "Determinism review", "Run telemetry"):
+        assert title in html
+
+
+def test_loop_header_carries_an_at_a_glance():
+    prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
+    html = render.page(_model(prs=prs, reviews=[_review("running")]))
+    assert 'class="glance"' in html
+    assert "proposed" in html  # dependency-patch glance
+    assert "reviewed" in html  # determinism glance
+
+
+def test_framing_notes_fold_behind_details():
+    html = render.page(_model())
+    assert 'details class="why"' in html
