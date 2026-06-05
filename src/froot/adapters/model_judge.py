@@ -1,6 +1,7 @@
 """The thin model judgment: is this changelog a clean patch?
 
-froot's one model call. A Pydantic AI agent reads the changelog and returns a
+froot's changelog model call — one of two (the determinism reviewer's frontier
+judge is the other). A Pydantic AI agent reads the changelog and returns a
 typed :class:`_Assessment`, which :func:`assessment_to_verdict` maps to the
 domain :data:`~froot.domain.changelog.ChangelogVerdict`. The verdict is framing,
 not a gate — the spine proposes the bump regardless — so even a "risky" reading

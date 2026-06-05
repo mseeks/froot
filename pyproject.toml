@@ -1,7 +1,7 @@
 [project]
 name = "froot"
 version = "0.1.0"
-description = "Durable, self-scheduled code-maintenance loops on Temporal, pointed at any repo. First loop: dependency-patch (Pydantic AI on Temporal)."
+description = "Durable, self-scheduled code-maintenance loops on Temporal, pointed at any repo. Loops today: dependency-patch (npm + uv) and a Temporal-determinism reviewer (Pydantic AI on Temporal)."
 readme = "README.md"
 # Pinned to a uv-managed 3.13 (see .python-version): the local Homebrew 3.14
 # ships a broken pyexpat, and Temporal, Pydantic AI, and Pydantic v2 all support

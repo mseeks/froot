@@ -237,7 +237,7 @@ def _track_record(model: DashboardModel) -> str:
     )
     note = (
         '<p class="note">Merge rate is the Stage-1 signal &mdash; narrow to '
-        "npm patch bumps by construction. It counts a human merge, not a "
+        "npm + uv patch bumps by construction. It counts a human merge, not a "
         "confirmed good outcome: revert tracking is a later loop, so merge is "
         "not yet proof of success.</p>"
     )
@@ -292,11 +292,11 @@ def _judgment(model: DashboardModel) -> str:
         )
     else:
         note = (
-            '<p class="note">The model&rsquo;s only job is the changelog '
-            "verdict; the spine proposes the bump either way.</p>"
+            '<p class="note">In this loop the model&rsquo;s only job is the '
+            "changelog verdict; the spine proposes the bump either way.</p>"
         )
     return (
-        "<section><h2>Model judgment &middot; the one model call</h2>"
+        "<section><h2>Model judgment &middot; the changelog verdict</h2>"
         f'<div class="stats">{stats}</div>{_why(note)}</section>'
     )
 
@@ -499,8 +499,9 @@ def _footer() -> str:
         "<b>Authority envelope.</b> Stage 1 &mdash; froot holds "
         "<b>write authority</b> only: it opens PRs, a human approves every "
         "merge (commit authority = none). Trust, when any is granted, is "
-        "earned, narrow to npm patch bumps, conditional on its environment "
-        '(judge <span class="mono">gemma4:e4b</span>, lockfile-only regen), '
+        "earned, narrow to npm + uv patch bumps, conditional on its "
+        'environment (judge <span class="mono">gemma4:e4b</span>, '
+        "lockfile-only regen), "
         "revocable, and time-expiring. Today it records the track record; it "
         "does not yet act on it.<br>"
         "Everything above is derived on this request from GitHub (outcomes) + "

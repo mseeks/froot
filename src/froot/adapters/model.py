@@ -1,4 +1,7 @@
-"""The model behind the changelog judgment.
+"""The shared judge model.
+
+Behind both the changelog-risk judge and the determinism reviewer's frontier
+judge.
 
 A local Ollama (Gemma) driven through its OpenAI-compatible ``/v1`` by Pydantic
 AI's OpenAI provider, so froot keeps heavy inference off the request-tight

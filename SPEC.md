@@ -12,6 +12,14 @@
 > loop config, infra) follows in a later revision. When in doubt, this document is the
 > tiebreaker: it says what froot is *for*, so the how can be argued on the merits.
 
+> **Status — 2026-06-04.** The charter still holds; reality has run ahead of it in places.
+> **Built and running:** the **dependency-patch** loop across several target repos in *both*
+> ecosystems (npm + uv) — it has opened, CI-verified, and merged real PRs (and correctly
+> *rejected* at least one after CI went red); a **determinism-reviewer** loop; and a derived
+> read-model **dashboard**. **Not yet started:** **security-patch** (the planned stage 2) and any
+> **autonomy gate** — every PR is still human-approved (record-only). The per-stage state is in
+> the [Roadmap](#roadmap) below.
+
 ---
 
 ## What froot is
@@ -84,7 +92,9 @@ violates one of these.
    first running supervised.*
 
 7. **Grow by adding loops, not by broadening one.** froot stays at one loop until it closes
-   end-to-end. The next capability is the next loop, reusing the chassis.
+   end-to-end. The next capability is the next loop, reusing the chassis. *(In practice the
+   determinism reviewer arrived before dependency-patch's planned successor — a deliberate,
+   disclosed deviation; see the Roadmap.)*
    *Why: a dozen simple loops compounding beats one clever loop burning attention.*
 
 ## The first loop: dependency-patch
@@ -103,7 +113,7 @@ flowchart LR
 
     Schedule["⏰ Durable schedule<br/>(Temporal timer)"]
     Checkout["📥 Shallow checkout<br/>(target repo)"]
-    Scan["🔍 Find patch candidates<br/>(npm outdated · deterministic)"]
+    Scan["🔍 Find patch candidates<br/>(npm outdated / uv · deterministic)"]
     Judge["🤖 Judge changelog risk<br/>(thin pydantic-ai)"]
     PR["🔀 One PR per bump<br/>(manifest + lockfile · idempotent)"]
     CI{"✅ Repo's own CI<br/>green?"}
@@ -211,15 +221,23 @@ track record so that, later, moving a gate is what the numbers say rather than a
 
 ## Roadmap
 
-Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
+Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next. Status markers
+(✅ done · ◐ partial · ○ not started) are as of 2026-06-04.
 
-1. **Now — close one loop.** dependency-patch, end-to-end, on one target repo. The template.
-2. **Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
-   Nearly free; proves the template is a template.
-3. **Coordinate.** Add notifier loops (`derived-state`, `determinism`) that durably guard an
+1. ✅ **Close one loop.** dependency-patch, end-to-end. *Done, and past the original bar:* it
+   runs on **several** target repos across **both** ecosystems (npm + uv), and has opened,
+   CI-verified, and merged real PRs — with at least one bump correctly closed after CI went red.
+   This is the template the rest reuses.
+2. ○ **Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
+   Nearly free; proves the template is a template. *Not started — the next intended loop.*
+3. ◐ **Coordinate.** Add notifier loops (`derived-state`, `determinism`) that durably guard an
    already-running durable app — froot's second durable system keeping the first one healthy —
-   and let loops start reading each other's GitHub/ClickStack signals.
-4. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
+   and let loops start reading each other's GitHub/ClickStack signals. *Early and partial:* the
+   **determinism** reviewer is built and shipped, but it currently guards froot's *own*
+   workflow-determinism (an advisory PR comment) and it landed *ahead* of stage 2 — a
+   deliberate-but-noted deviation from "one loop at a time." `derived-state` and cross-loop
+   signal-reading are still ○.
+4. ○ **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
    are the ones that need a real agentic coding harness; that decision is made *then*, on terrain
    that already works — not now.
 
@@ -227,13 +245,18 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 
 Naming these is how we stay KISS. Each is deferred on purpose, not forgotten.
 
-- **Auto-merge / earned autonomy.** Record the track record first; act on it once it exists.
-- **A reputation store.** Derive it from GitHub + ClickStack.
+- **Auto-merge / earned autonomy.** Record the track record first; act on it once it's earned.
+  *The record now exists (real merges + a CI-caught rejection); the gate is still
+  human-approves-every-PR.*
+- **A reputation store.** Derive it from GitHub + ClickStack. *(The read-model dashboard now does
+  exactly this — it computes reputation on read and stores nothing.)*
 - **An agentic coding harness.** A mechanical loop doesn't need one. It arrives with the fixers.
 - **Running tests or builds on the cluster.** CI does that.
 - **Multi-ecosystem beyond npm + uv.** Add ecosystems as real loops demand them.
-- **A cross-repo "loop platform" abstraction.** Extract the shared chassis from the *second*
-  loop, not from a guess. One loop's chassis is allowed to look like one loop.
+- **A cross-repo "loop platform" abstraction.** Extract the shared chassis from a *sibling*
+  loop's needs, not from a guess. A second loop (determinism-review) already reuses this chassis
+  by convention, not via an extracted abstraction — that stays deferred until a sibling loop
+  (security-patch) reveals the real contract. One loop's chassis is allowed to look like one loop.
 - **Unifying the three `lib` harnesses.** Note the duplication; converge it when froot's chassis
   has proven what the real contract is.
 

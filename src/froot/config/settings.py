@@ -7,7 +7,8 @@
   :class:`~pydantic.SecretStr`, so it is masked in ``repr``, logs, and
   tracebacks and cannot leak accidentally.
 * :class:`ModelSettings` (``FROOT_OLLAMA_MODEL`` / ``FROOT_OLLAMA_URL``) — the
-  changelog-judge model endpoint.
+  shared judge-model endpoint (the changelog-risk judge and the determinism
+  reviewer's frontier judge).
 * :class:`TelemetrySettings` (``FROOT_OTEL``) — observability toggle.
 
 Each consumer builds the small model it needs at its point of use; nothing
@@ -110,7 +111,10 @@ class GitHubSettings(BaseSettings):
 
 
 class ModelSettings(BaseSettings):
-    """The changelog-judge model endpoint (a local Ollama by default)."""
+    """The shared judge-model endpoint (a local Ollama by default).
+
+    Used by both the changelog-risk judge and the determinism frontier judge.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="FROOT_", env_file=".env", extra="ignore", frozen=True
