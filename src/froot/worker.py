@@ -1,7 +1,7 @@
 """The Temporal worker entrypoint — the runnable assembly.
 
 Connects to Temporal with the Pydantic data converter and registers the whole
-runtime: both workflows and every activity. Run it once a Temporal server is
+runtime: all four workflows and every activity. Run it once a Temporal server is
 reachable::
 
     python -m froot.worker
@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import logging
 import signal
+import sys
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -36,6 +37,33 @@ from froot.workflow.runtime import ALL_ACTIVITIES, DATA_CONVERTER, WORKFLOWS
 # (which serializes anyway), and the household/hobby volume never needs more.
 # The durable CI wait sleeps between polls, so it does not hold this slot.
 _MAX_CONCURRENT_ACTIVITIES = 1
+
+
+def configure_logging() -> None:
+    """Send froot's structured outcome lines to stdout at INFO.
+
+    The activities emit one JSON ``loop_outcome`` line per closed loop on the
+    ``froot.*`` loggers at INFO — the cheap, human-readable half of "derive,
+    never store", and the stream the deploy points operators (and the ClickStack
+    filelog) at. A logger with no configured handler defaults to WARNING, so
+    without this those INFO lines are silently dropped. Attach a single stdout
+    handler at INFO that emits the record verbatim (the message is already JSON,
+    so it stays machine-parseable), and pin the chatty ``temporalio`` SDK at
+    WARNING so the outcome lines are not buried in poll/heartbeat noise.
+
+    Idempotent: a second call neither duplicates the handler nor lowers levels.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    already = any(
+        isinstance(h, logging.StreamHandler) and h.stream is sys.stdout
+        for h in root.handlers
+    )
+    if not already:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root.addHandler(handler)
+    logging.getLogger("temporalio").setLevel(logging.WARNING)
 
 
 async def run_worker(
@@ -105,6 +133,7 @@ async def run_worker(
 
 def main() -> None:
     """Console entrypoint: run the worker, configured from the environment."""
+    configure_logging()
     asyncio.run(run_worker())
 
 

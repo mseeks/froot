@@ -13,7 +13,9 @@ read at the boundary as untyped payloads and coerced into the domain.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, final
 
 import httpx
@@ -30,6 +32,7 @@ from froot.domain.ci import (
 from froot.domain.pull_request import BranchName, PullRequestRef
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from froot.domain.pull_request import PullRequestDraft
@@ -125,13 +128,125 @@ def _client() -> httpx.AsyncClient:
     )
 
 
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """The server-advised wait before retrying a rate-limited request, if any.
+
+    Honors the secondary-limit ``Retry-After`` header (delta-seconds form), then
+    the primary-limit ``X-RateLimit-Reset`` (epoch) when the remaining quota is
+    zero. Returns ``None`` when GitHub gives no usable hint (let Temporal's own
+    backoff decide).
+    """
+    retry_after = response.headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            return None  # HTTP-date form is rare from GitHub; fall through.
+    if response.headers.get("x-ratelimit-remaining") == "0":
+        reset = response.headers.get("x-ratelimit-reset")
+        if reset is not None:
+            try:
+                return max(0.0, float(reset) - time.time())
+            except ValueError:
+                return None
+    return None
+
+
+def _is_rate_limited(response: httpx.Response) -> bool:
+    """Whether a 403/429 is GitHub *rate limiting* (transient), not auth.
+
+    GitHub overloads 403 for both a permanent permission fault AND its secondary
+    rate limit, so the two are told apart by the rate-limit markers: an explicit
+    ``Retry-After``, an exhausted ``X-RateLimit-Remaining``, or a "rate limit"
+    note in the body (the secondary-limit form often only says so there).
+    """
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    if "retry-after" in response.headers:
+        return True
+    if response.headers.get("x-ratelimit-remaining") == "0":
+        return True
+    return "rate limit" in response.text.lower()
+
+
 def _raise_for_status(response: httpx.Response) -> None:
-    """Raise on error; 401/403 is a permanent (non-retryable) auth fault."""
-    if response.status_code in (401, 403):
+    """Raise on error, classifying retryability the way the loop needs.
+
+    A 401 is always a permanent auth fault. A 403/429 doubles as GitHub's
+    rate-limit signal: when it carries a rate-limit marker the fault is
+    TRANSIENT, so raise a *retryable* error (honoring the server's advised wait)
+    and let Temporal back off rather than killing the loop — this is the
+    call-heaviest path (the durable CI poll), so a transient limit must not be
+    fatal. A 403 without those markers is a real permission fault and stays
+    non-retryable.
+    """
+    if response.status_code == 401:
+        raise ApplicationError("GitHub auth failed (401)", non_retryable=True)
+    if response.status_code in (403, 429) and _is_rate_limited(response):
+        delay = _retry_after_seconds(response)
         raise ApplicationError(
-            f"GitHub auth failed ({response.status_code})", non_retryable=True
+            f"GitHub rate-limited ({response.status_code}); backing off",
+            type="GitHubRateLimited",
+            next_retry_delay=(
+                timedelta(seconds=delay) if delay is not None else None
+            ),
         )
+    if response.status_code == 403:
+        raise ApplicationError("GitHub auth failed (403)", non_retryable=True)
     response.raise_for_status()
+
+
+def _next_link(response: httpx.Response) -> str | None:
+    """The ``rel="next"`` page URL from the Link header, or None at the end."""
+    nxt = response.links.get("next")
+    return nxt.get("url") if nxt else None
+
+
+async def _iter_pages(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, Any] | None = None,
+) -> AsyncIterator[httpx.Response]:
+    """Yield each page of a GitHub list endpoint, following Link ``rel=next``.
+
+    GitHub caps a page at 100 items; a single ``per_page=100`` read silently
+    truncates a busy repo — which here would *misread the CI oracle* (a failing
+    101st check goes unseen) or *break comment idempotency* (froot's marker on a
+    later page is missed, so it posts a duplicate). Following the Link header
+    reads the whole set; the data, not a fixed cap, bounds the loop.
+    """
+    next_url: str | None = url
+    # First page carries the caller's filters + per_page; later pages use the
+    # absolute Link URL verbatim (it already encodes them), so params drop off.
+    next_params: dict[str, Any] | None = {**(params or {}), "per_page": 100}
+    while next_url is not None:
+        resp = await client.get(next_url, params=next_params)
+        _raise_for_status(resp)
+        yield resp
+        next_url = _next_link(resp)
+        next_params = None
+
+
+async def _marked_comment_id(
+    client: httpx.AsyncClient, slug: str, number: int, marker: str
+) -> int | None:
+    """The id of froot's ``marker``-tagged comment on a PR, across all pages.
+
+    Searches every comment page (stopping at the first hit) so a chatty PR that
+    pushes the marker past the first 100 comments cannot fool the upsert into
+    posting a duplicate.
+    """
+    async for page in _iter_pages(
+        client, f"/repos/{slug}/issues/{number}/comments"
+    ):
+        for comment in page.json():
+            if isinstance(comment, dict) and marker in str(
+                comment.get("body", "")
+            ):
+                return int(comment["id"])
+    return None
 
 
 def _pull_request_ref(payload: Any) -> PullRequestRef:
@@ -238,16 +353,17 @@ class GitHubForge:
         self, target: TargetRepo
     ) -> tuple[PullRequestRef, ...]:
         """List the repo's open PRs (the determinism reviewer's work feed)."""
+        refs: list[PullRequestRef] = []
         async with _client() as client:
-            resp = await client.get(
+            async for page in _iter_pages(
+                client,
                 f"/repos/{target.repo.slug}/pulls",
-                params={"state": "open", "per_page": 100},
-            )
-        _raise_for_status(resp)
-        payloads = resp.json()
-        if not isinstance(payloads, list):
-            return ()
-        return tuple(_pull_request_ref(payload) for payload in payloads)
+                {"state": "open"},
+            ):
+                payload = page.json()
+                if isinstance(payload, list):
+                    refs.extend(_pull_request_ref(p) for p in payload)
+        return tuple(refs)
 
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft
@@ -271,36 +387,41 @@ class GitHubForge:
         return _pull_request_ref(resp.json())
 
     async def ci_status(self, target: TargetRepo, head_sha: str) -> CIStatus:
-        """Read the repo's combined CI status for a commit (the oracle)."""
+        """Read the repo's combined CI status for a commit (the oracle).
+
+        The check-runs are paginated (a commit can have >100 checks, and missing
+        a failing one would falsely read green); the legacy combined status is a
+        single rolled-up ``state`` over all statuses, so it needs no paging.
+        """
+        slug = target.repo.slug
+        rows: list[CheckRow] = []
         async with _client() as client:
-            checks_resp = await client.get(
-                f"/repos/{target.repo.slug}/commits/{head_sha}/check-runs",
-                params={"per_page": 100},
-            )
+            async for page in _iter_pages(
+                client, f"/repos/{slug}/commits/{head_sha}/check-runs"
+            ):
+                rows.extend(
+                    CheckRow(
+                        name=str(run["name"]),
+                        status=str(run["status"]),
+                        conclusion=(
+                            str(run["conclusion"])
+                            if run.get("conclusion") is not None
+                            else None
+                        ),
+                    )
+                    for run in page.json().get("check_runs", [])
+                )
             status_resp = await client.get(
-                f"/repos/{target.repo.slug}/commits/{head_sha}/status"
+                f"/repos/{slug}/commits/{head_sha}/status"
             )
-        _raise_for_status(checks_resp)
         _raise_for_status(status_resp)
-        rows = tuple(
-            CheckRow(
-                name=str(run["name"]),
-                status=str(run["status"]),
-                conclusion=(
-                    str(run["conclusion"])
-                    if run.get("conclusion") is not None
-                    else None
-                ),
-            )
-            for run in checks_resp.json().get("check_runs", [])
-        )
         status_json = status_resp.json()
         combined = (
             str(status_json["state"])
             if int(status_json.get("total_count", 0)) > 0
             else None
         )
-        return ci_status_from_checks(rows, combined)
+        return ci_status_from_checks(tuple(rows), combined)
 
     async def add_labels(
         self, target: TargetRepo, number: int, labels: tuple[str, ...]
@@ -325,18 +446,7 @@ class GitHubForge:
         """
         slug = target.repo.slug
         async with _client() as client:
-            listing = await client.get(
-                f"/repos/{slug}/issues/{number}/comments",
-                params={"per_page": 100},
-            )
-            _raise_for_status(listing)
-            existing_id: int | None = None
-            for comment in listing.json():
-                if isinstance(comment, dict) and marker in str(
-                    comment.get("body", "")
-                ):
-                    existing_id = int(comment["id"])
-                    break
+            existing_id = await _marked_comment_id(client, slug, number, marker)
             if existing_id is not None:
                 resp = await client.patch(
                     f"/repos/{slug}/issues/comments/{existing_id}",
