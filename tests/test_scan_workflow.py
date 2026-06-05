@@ -6,12 +6,16 @@ selected candidate, and the tick's reported counts.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from temporalio import activity
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from froot.domain.candidate import PatchCandidate
+from froot.domain.repo import TargetRepo
 from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.scan_workflow import ScanWorkflow
 from froot.workflow.types import DispatchInput, ScanParams, ScanResult
@@ -34,6 +38,18 @@ async def _mock_dispatch(params: DispatchInput) -> None:
     _dispatched.append(params.candidate.package)
 
 
+@activity.defn(name="reconcile_open_prs")
+async def _mock_reconcile(target: TargetRepo) -> int:
+    return 1
+
+
+_MOCKS: list[Callable[..., Any]] = [
+    _mock_scan,
+    _mock_dispatch,
+    _mock_reconcile,
+]
+
+
 async def _pydantic_client(env: WorkflowEnvironment) -> Client:
     config = env.client.config()
     config["data_converter"] = DATA_CONVERTER
@@ -48,7 +64,7 @@ async def test_scan_dispatches_each_candidate():
             client,
             task_queue=_TASK_QUEUE,
             workflows=[ScanWorkflow],
-            activities=[_mock_scan, _mock_dispatch],
+            activities=_MOCKS,
         ):
             result: ScanResult = await client.execute_workflow(
                 ScanWorkflow.run,
@@ -58,6 +74,7 @@ async def test_scan_dispatches_each_candidate():
             )
     assert result.found == 2
     assert result.dispatched == 2
+    assert result.reconciled == 1  # the reconcile sweep ran after dispatch
     assert sorted(_dispatched) == ["alpha", "beta"]
 
 
@@ -69,7 +86,7 @@ async def test_continuous_loop_keeps_running_and_redispatches():
             client,
             task_queue=_TASK_QUEUE,
             workflows=[ScanWorkflow],
-            activities=[_mock_scan, _mock_dispatch],
+            activities=_MOCKS,
         ):
             handle = await client.start_workflow(
                 ScanWorkflow.run,

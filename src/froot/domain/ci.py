@@ -31,7 +31,13 @@ class CIPassed(Frozen):
 
 
 class CIFailed(Frozen):
-    """At least one check failed; the PR stays open, flagged for the human."""
+    """At least one check failed; the bump did not earn a merge.
+
+    Under the default close-on-red policy the loop closes the PR (and deletes
+    its branch) so no rotting red proposal is left behind; with close-on-red
+    disabled the PR stays open, flagged for the human. Either way the outcome
+    is recorded. ``failing`` names the checks that failed, for the comment.
+    """
 
     kind: Literal["failed"] = "failed"
     failing: tuple[str, ...] = ()

@@ -43,6 +43,20 @@ class AwaitCi(Frozen):
     pr: PullRequestRef
 
 
+class ClosePullRequest(Frozen):
+    """Close a red bump's PR (comment why, close it, delete its branch).
+
+    Emitted in place of going straight to the record when CI came back failed
+    and close-on-red is enabled: the loop leaves no rotting red PR behind. The
+    failing check names ride along so the spine can comment what failed; the
+    record still follows (this state's outcome), so the red outcome is logged.
+    """
+
+    kind: Literal["close_pull_request"] = "close_pull_request"
+    pr: PullRequestRef
+    failing: tuple[str, ...] = ()
+
+
 class RecordOutcome(Frozen):
     """Record the closed-loop outcome (label the PR, emit run telemetry)."""
 
@@ -52,6 +66,10 @@ class RecordOutcome(Frozen):
 
 # What the spine should do after a transition.
 Effect = Annotated[
-    JudgeChangelog | OpenPullRequest | AwaitCi | RecordOutcome,
+    JudgeChangelog
+    | OpenPullRequest
+    | AwaitCi
+    | ClosePullRequest
+    | RecordOutcome,
     Field(discriminator="kind"),
 ]

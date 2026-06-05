@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
     from froot.domain.ci import CIStatus, CITimedOut, is_terminal
     from froot.domain.effects import (
         AwaitCi,
+        ClosePullRequest,
         Effect,
         JudgeChangelog,
         OpenPullRequest,
@@ -30,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         CiResolved,
         LoopEvent,
         OutcomeRecorded,
+        PullRequestClosed,
         PullRequestReady,
     )
     from froot.domain.outcome import LoopOutcome
@@ -41,10 +43,12 @@ with workflow.unsafe.imports_passed_through():
         CI_CHECK_TIMEOUT,
         CI_POLL_INTERVAL,
         CI_WAIT_DEADLINE,
+        TOOL_RETRY,
     )
     from froot.workflow.types import (
         BumpParams,
         CiCheckInput,
+        CloseInput,
         OpenPrInput,
         RecordInput,
     )
@@ -73,7 +77,7 @@ class BumpWorkflow:
                     non_retryable=True,
                 )
             event = await self._execute(params.target, transition.effects[0])
-            transition = advance(state, event)
+            transition = advance(state, event, close_on_red=params.close_on_red)
             if transition.kind is TransitionKind.REJECTED:
                 raise ApplicationError(
                     f"rejected transition: {transition.reason}",
@@ -95,6 +99,7 @@ class BumpWorkflow:
                     activities.judge_changelog,
                     effect.candidate,
                     start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
                 )
                 return ChangelogJudged(verdict=verdict)
             case OpenPullRequest():
@@ -106,16 +111,30 @@ class BumpWorkflow:
                         verdict=effect.verdict,
                     ),
                     start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
                 )
                 return PullRequestReady(pr=pr)
             case AwaitCi():
                 status = await self._await_ci(target, effect.pr)
                 return CiResolved(status=status)
+            case ClosePullRequest():
+                await workflow.execute_activity(
+                    activities.close_pull_request,
+                    CloseInput(
+                        target=target,
+                        pr=effect.pr,
+                        failing=effect.failing,
+                    ),
+                    start_to_close_timeout=CI_CHECK_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+                return PullRequestClosed()
             case RecordOutcome():
                 await workflow.execute_activity(
                     activities.record_outcome,
                     RecordInput(target=target, outcome=effect.outcome),
                     start_to_close_timeout=CI_CHECK_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
                 )
                 return OutcomeRecorded()
         assert_never(effect)
@@ -130,6 +149,7 @@ class BumpWorkflow:
                 activities.check_ci,
                 CiCheckInput(target=target, head_sha=pr.head_sha),
                 start_to_close_timeout=CI_CHECK_TIMEOUT,
+                retry_policy=TOOL_RETRY,
             )
             if is_terminal(status):
                 return status

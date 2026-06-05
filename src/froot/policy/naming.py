@@ -35,6 +35,17 @@ def branch_name(candidate: PatchCandidate) -> BranchName:
     )
 
 
+def branch_package_prefix(package: str) -> str:
+    """The branch-name prefix shared by every bump of ``package``.
+
+    ``branch_name`` appends ``-<target>`` to this, so an open PR belongs to
+    ``package`` iff its branch starts with this prefix *and* the remainder
+    parses as a version (reconcile relies on that version-parse to tell apart
+    packages whose slugs prefix one another — ``foo`` vs ``foo-bar``).
+    """
+    return f"{_BRANCH_PREFIX}/{_slug(package)}-"
+
+
 def bump_workflow_id(repo: TargetRepo, candidate: PatchCandidate) -> str:
     """The deterministic per-bump workflow id (the dispatch dedup key)."""
     return "-".join(

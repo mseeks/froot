@@ -51,10 +51,13 @@ class RiskyVerdict(Frozen):
 
 
 class UnknownVerdict(Frozen):
-    """No changelog could be fetched or read, so risk is unassessed.
+    """The changelog risk is unassessed — nothing to judge, or the judge failed.
 
-    Reached without spending a model call when there is nothing to judge — the
-    spine does not ask the model to assess an empty changelog.
+    Two ways here, neither of which yields a usable model verdict: there was no
+    changelog to fetch (so the spine never calls the model), or the model call
+    itself was unavailable and the activity degraded to this rather than stall
+    the spine. Either way the bump still proceeds — the verdict is framing, not
+    a gate.
     """
 
     kind: Literal["unknown"] = "unknown"

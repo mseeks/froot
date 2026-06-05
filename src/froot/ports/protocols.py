@@ -124,6 +124,25 @@ class Forge(Protocol):
         """Attach labels to a PR (the human-readable signal-update)."""
         ...
 
+    async def close_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        branch: BranchName,
+        *,
+        delete_branch: bool = True,
+    ) -> None:
+        """Close the PR and (by default) delete its head branch.
+
+        Idempotent: closing an already-closed PR is a no-op, and a missing
+        branch is tolerated — so a retried close never fails on a half-done
+        prior attempt. Deleting the branch keeps a re-derived bump from later
+        colliding with a stale ref (a non-fast-forward push). Any human-facing
+        explanation is posted separately via :meth:`upsert_issue_comment`, so
+        this stays a pure lifecycle action.
+        """
+        ...
+
 
 class ChangelogSource(Protocol):
     """Best-effort fetch of a target version's changelog / release notes."""

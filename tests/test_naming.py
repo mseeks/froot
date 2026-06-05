@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from froot.policy.naming import (
     branch_name,
+    branch_package_prefix,
     bump_workflow_id,
     scan_workflow_id,
 )
@@ -12,6 +13,22 @@ def test_branch_name_format():
     candidate = make_candidate(package="left-pad", target="1.4.3")
     assert (
         branch_name(candidate).value == "froot/dependency-patch/left-pad-1.4.3"
+    )
+
+
+def test_branch_package_prefix_is_branch_minus_version():
+    # The prefix is exactly branch_name minus the "-<target>" tail, so a bump's
+    # branch always starts with its package's prefix.
+    candidate = make_candidate(package="left-pad", target="1.4.3")
+    prefix = branch_package_prefix("left-pad")
+    assert prefix == "froot/dependency-patch/left-pad-"
+    assert branch_name(candidate).value.startswith(prefix)
+
+
+def test_branch_package_prefix_sanitizes_scoped_package():
+    assert (
+        branch_package_prefix("@scope/pkg")
+        == "froot/dependency-patch/scope-pkg-"
     )
 
 

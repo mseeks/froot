@@ -17,7 +17,9 @@ from froot.domain.outcome import LoopOutcome
 from froot.policy.naming import bump_workflow_id
 from froot.workflow import activities
 from froot.workflow.types import (
+    BumpParams,
     CiCheckInput,
+    CloseInput,
     DispatchInput,
     OpenPrInput,
     RecordInput,
@@ -30,6 +32,7 @@ from tests.support import (
     make_candidate,
     make_pr,
     make_repo,
+    make_upgrade,
     ver,
 )
 
@@ -176,7 +179,7 @@ class _FakeClient:
             raise WorkflowAlreadyStartedError(
                 workflow_id=id, workflow_type="BumpWorkflow"
             )
-        self.started.append({"id": id, "policy": id_reuse_policy})
+        self.started.append({"id": id, "policy": id_reuse_policy, "arg": arg})
 
 
 async def test_dispatch_bump_starts_with_reject_duplicate(
@@ -211,3 +214,95 @@ async def test_dispatch_bump_is_noop_when_already_started(
     await activities.dispatch_bump(
         DispatchInput(target=make_repo(), candidate=make_candidate())
     )
+
+
+async def test_dispatch_bump_pins_close_on_red(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The toggle is read at dispatch and pinned onto the bump's params, so the
+    # workflow never reads config itself.
+    monkeypatch.setenv("FROOT_CLOSE_ON_RED", "0")
+    fake = _FakeClient()
+
+    async def _client() -> _FakeClient:
+        return fake
+
+    monkeypatch.setattr(temporal_client, "client", _client)
+    await activities.dispatch_bump(
+        DispatchInput(target=make_repo(), candidate=make_candidate())
+    )
+    arg = fake.started[0]["arg"]
+    assert isinstance(arg, BumpParams)
+    assert arg.close_on_red is False
+
+
+async def test_close_pull_request_comments_then_closes_and_deletes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeForge()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    pr = make_pr(number=7)
+    await activities.close_pull_request(
+        CloseInput(target=make_repo(), pr=pr, failing=("build",))
+    )
+    assert fake.closed == [7]
+    assert fake.deleted_branches == [pr.branch]
+    # The "why" is posted (idempotent comment path) and names the failing check.
+    assert fake.comments and fake.comments[-1][0] == 7
+    assert "build" in fake.comments[-1][1]
+
+
+async def test_reconcile_open_prs_closes_superseded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FROOT_RECONCILE", "1")
+    upgrades = (
+        make_upgrade("left-pad", current="1.4.2", available=("1.4.3", "1.4.4")),
+    )
+    stale = make_pr(number=5, branch="froot/dependency-patch/left-pad-1.4.3")
+    fake = FakeForge(open_prs=(stale,))
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(upgrades),
+    )
+    closed = await activities.reconcile_open_prs(make_repo())
+    assert closed == 1
+    assert fake.closed == [5]
+    assert fake.deleted_branches == [stale.branch]
+
+
+async def test_reconcile_open_prs_noop_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FROOT_RECONCILE", "0")
+    fake = FakeForge(open_prs=(make_pr(),))
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    closed = await activities.reconcile_open_prs(make_repo())
+    assert closed == 0
+    assert fake.closed == []
+
+
+async def test_judge_changelog_degrades_to_unknown_on_model_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    changelog = Changelog(
+        package="left-pad", version=ver("1.4.3"), text="fixes"
+    )
+    monkeypatch.setattr(
+        changelog_mod,
+        "HttpChangelogSource",
+        lambda: FakeChangelogSource(changelog),
+    )
+
+    class _BoomJudge:
+        async def judge(self, changelog: Changelog) -> object:
+            raise RuntimeError("ollama unreachable")
+
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: _BoomJudge())
+    # The model is non-load-bearing: its failure degrades to unknown, never
+    # failing the activity (which would stall the spine on a flaky model).
+    verdict = await activities.judge_changelog(make_candidate())
+    assert isinstance(verdict, UnknownVerdict)
+    assert "unavailable" in verdict.rationale.lower()

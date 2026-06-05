@@ -40,6 +40,12 @@ class CiResolved(Frozen):
     status: CIStatus
 
 
+class PullRequestClosed(Frozen):
+    """The red bump's PR was closed (and its branch deleted)."""
+
+    kind: Literal["pull_request_closed"] = "pull_request_closed"
+
+
 class OutcomeRecorded(Frozen):
     """The outcome was recorded; the loop has nothing left to do."""
 
@@ -48,6 +54,10 @@ class OutcomeRecorded(Frozen):
 
 # A decided input to the loop state machine.
 LoopEvent = Annotated[
-    ChangelogJudged | PullRequestReady | CiResolved | OutcomeRecorded,
+    ChangelogJudged
+    | PullRequestReady
+    | CiResolved
+    | PullRequestClosed
+    | OutcomeRecorded,
     Field(discriminator="kind"),
 ]

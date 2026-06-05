@@ -224,3 +224,35 @@ class ReviewSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return True
         return value
+
+
+class BehaviorSettings(BaseSettings):
+    """Loop-hygiene toggles (``FROOT_*``), both defaulting on.
+
+    * ``close_on_red`` — close a bump's PR (and delete its branch) when its CI
+      comes back red, so no rotting red proposal is left for the human. The
+      outcome is still recorded either way. Read at dispatch and pinned onto the
+      bump's params, so an in-flight bump keeps the value it started with.
+    * ``reconcile`` — each scan tick, close froot PRs a newer patch has
+      superseded or the base has already satisfied. Read by the reconcile
+      activity, which no-ops when it is off.
+
+    Both close-then-delete a branch, so they are the destructive knobs; default
+    on (the SPEC's behavior), but here to disable for cautious adoption on a
+    flaky-CI repo.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_", env_file=".env", extra="ignore", frozen=True
+    )
+
+    close_on_red: bool = True
+    reconcile: bool = True
+
+    @field_validator("close_on_red", "reconcile", mode="before")
+    @classmethod
+    def _blank_is_on(cls, value: object) -> object:
+        """Treat an empty/whitespace value as the default (on), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return True
+        return value

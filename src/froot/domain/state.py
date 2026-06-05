@@ -44,6 +44,19 @@ class AwaitingCi(Frozen):
     pr: PullRequestRef
 
 
+class Closing(Frozen):
+    """CI failed and close-on-red is on: the PR is being closed before record.
+
+    A transient stage between a red CI reading and the terminal record: the
+    spine closes the PR (and deletes its branch), then the loop records the
+    same outcome it would have anyway. Carries the already-built outcome so the
+    record step needs nothing more.
+    """
+
+    kind: Literal["closing"] = "closing"
+    outcome: LoopOutcome
+
+
 class Recorded(Frozen):
     """Terminal: CI resolved and the outcome was recorded."""
 
@@ -53,6 +66,6 @@ class Recorded(Frozen):
 
 # The state of a single bump's loop.
 BumpState = Annotated[
-    Discovered | Judged | AwaitingCi | Recorded,
+    Discovered | Judged | AwaitingCi | Closing | Recorded,
     Field(discriminator="kind"),
 ]

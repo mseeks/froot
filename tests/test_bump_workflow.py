@@ -31,6 +31,7 @@ from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.types import (
     BumpParams,
     CiCheckInput,
+    CloseInput,
     OpenPrInput,
     RecordInput,
 )
@@ -39,6 +40,8 @@ from tests.support import make_candidate, make_pr, make_repo
 _TASK_QUEUE = "froot-test"
 # A scripted CI reply sequence the mock pops through (then falls back to green).
 _ci_replies: list[CIStatus] = []
+# PR numbers the close-on-red path closed, in order.
+_closed: list[int] = []
 
 
 @activity.defn(name="judge_changelog")
@@ -61,11 +64,17 @@ async def _mock_record(params: RecordInput) -> None:
     return None
 
 
+@activity.defn(name="close_pull_request")
+async def _mock_close(params: CloseInput) -> None:
+    _closed.append(params.pr.number)
+
+
 _MOCKS: list[Callable[..., Any]] = [
     _mock_judge,
     _mock_open_pr,
     _mock_check_ci,
     _mock_record,
+    _mock_close,
 ]
 
 
@@ -75,7 +84,7 @@ async def _pydantic_client(env: WorkflowEnvironment) -> Client:
     return Client(**config)
 
 
-async def _run_bump() -> LoopOutcome:
+async def _run_bump(*, close_on_red: bool = True) -> LoopOutcome:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
         async with Worker(
@@ -86,7 +95,11 @@ async def _run_bump() -> LoopOutcome:
         ):
             return await client.execute_workflow(
                 BumpWorkflow.run,
-                BumpParams(target=make_repo(), candidate=make_candidate()),
+                BumpParams(
+                    target=make_repo(),
+                    candidate=make_candidate(),
+                    close_on_red=close_on_red,
+                ),
                 id="bump-test",
                 task_queue=_TASK_QUEUE,
             )
@@ -94,18 +107,34 @@ async def _run_bump() -> LoopOutcome:
 
 async def test_happy_path_green():
     _ci_replies.clear()
+    _closed.clear()
     outcome = await _run_bump()
     assert outcome.pr.number == 7
     assert outcome.ci_passed
     assert isinstance(outcome.ci, CIPassed)
+    assert _closed == []  # green PRs are left for the human, never closed
 
 
-async def test_ci_failed_records_failure_and_does_not_merge():
+async def test_ci_failed_closes_pr_and_records_failure():
     _ci_replies.clear()
+    _closed.clear()
     _ci_replies.append(CIFailed(failing=("build",)))
     outcome = await _run_bump()
     assert not outcome.ci_passed
     assert isinstance(outcome.ci, CIFailed)
+    # Close-on-red (the default): the red PR is closed, and the outcome is
+    # still recorded (the loop reached its terminal state).
+    assert _closed == [7]
+
+
+async def test_ci_failed_left_open_when_close_on_red_off():
+    _ci_replies.clear()
+    _closed.clear()
+    _ci_replies.append(CIFailed(failing=("build",)))
+    outcome = await _run_bump(close_on_red=False)
+    assert isinstance(outcome.ci, CIFailed)
+    # close-on-red off: the red PR is recorded but left open for the human.
+    assert _closed == []
 
 
 async def test_ci_pending_then_pass_waits_durably():

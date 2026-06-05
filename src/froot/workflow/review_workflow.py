@@ -20,7 +20,11 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from froot.workflow import activities
-    from froot.workflow.constants import CI_CHECK_TIMEOUT, DISPATCH_TIMEOUT
+    from froot.workflow.constants import (
+        CI_CHECK_TIMEOUT,
+        DISPATCH_TIMEOUT,
+        TOOL_RETRY,
+    )
     from froot.workflow.types import (
         DispatchReviewInput,
         ReviewScanParams,
@@ -39,12 +43,14 @@ class ReviewWorkflow:
             activities.list_review_prs,
             params.target,
             start_to_close_timeout=CI_CHECK_TIMEOUT,
+            retry_policy=TOOL_RETRY,
         )
         for pr in prs:
             await workflow.execute_activity(
                 activities.dispatch_pr_review,
                 DispatchReviewInput(target=params.target, pr=pr),
                 start_to_close_timeout=DISPATCH_TIMEOUT,
+                retry_policy=TOOL_RETRY,
             )
         result = ReviewScanResult(reviewed=len(prs), dispatched=len(prs))
         if not params.continuous:

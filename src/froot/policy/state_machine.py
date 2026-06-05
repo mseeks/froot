@@ -20,9 +20,10 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
 
 from froot.domain.base import Frozen
-from froot.domain.ci import is_terminal
+from froot.domain.ci import CIFailed, is_terminal
 from froot.domain.effects import (
     AwaitCi,
+    ClosePullRequest,
     Effect,
     JudgeChangelog,
     OpenPullRequest,
@@ -33,12 +34,14 @@ from froot.domain.events import (
     CiResolved,
     LoopEvent,
     OutcomeRecorded,
+    PullRequestClosed,
     PullRequestReady,
 )
 from froot.domain.outcome import LoopOutcome
 from froot.domain.state import (
     AwaitingCi,
     BumpState,
+    Closing,
     Discovered,
     Judged,
     Recorded,
@@ -91,12 +94,17 @@ def start(candidate: PatchCandidate) -> Transition:
     )
 
 
-def advance(state: BumpState, event: LoopEvent) -> Transition:
+def advance(
+    state: BumpState, event: LoopEvent, *, close_on_red: bool = True
+) -> Transition:
     """Advance the loop one step (pure).
 
     Args:
         state: The current bump state.
         event: The decided event that just occurred.
+        close_on_red: Whether a terminal red CI should close the PR before
+            recording (the only transition this affects). Passed in rather than
+            read from config so the machine stays pure and replay-safe.
 
     Returns:
         The :class:`Transition` to apply.
@@ -107,7 +115,9 @@ def advance(state: BumpState, event: LoopEvent) -> Transition:
         case Judged():
             return _from_judged(state, event)
         case AwaitingCi():
-            return _from_awaiting_ci(state, event)
+            return _from_awaiting_ci(state, event, close_on_red=close_on_red)
+        case Closing():
+            return _from_closing(state, event)
         case Recorded():
             return _from_recorded(state, event)
     assert_never(state)
@@ -141,7 +151,9 @@ def _from_judged(state: Judged, event: LoopEvent) -> Transition:
             return _rejected(state, f"unexpected {event.kind} in judged")
 
 
-def _from_awaiting_ci(state: AwaitingCi, event: LoopEvent) -> Transition:
+def _from_awaiting_ci(
+    state: AwaitingCi, event: LoopEvent, *, close_on_red: bool
+) -> Transition:
     match event:
         case CiResolved():
             if not is_terminal(event.status):
@@ -152,11 +164,34 @@ def _from_awaiting_ci(state: AwaitingCi, event: LoopEvent) -> Transition:
                 pr=state.pr,
                 ci=event.status,
             )
+            # Red CI with close-on-red on: close the PR first (the loop leaves
+            # no rotting red proposal), then record the same outcome. Every
+            # other terminal reading (passed / absent / timed out), and red with
+            # close-on-red off, records straight away and leaves the PR for the
+            # human.
+            if isinstance(event.status, CIFailed) and close_on_red:
+                return _advanced(
+                    Closing(outcome=outcome),
+                    ClosePullRequest(pr=state.pr, failing=event.status.failing),
+                )
             return _advanced(
                 Recorded(outcome=outcome), RecordOutcome(outcome=outcome)
             )
         case _:
             return _rejected(state, f"unexpected {event.kind} in awaiting_ci")
+
+
+def _from_closing(state: Closing, event: LoopEvent) -> Transition:
+    match event:
+        case PullRequestClosed():
+            # The PR is closed; record the outcome it was carrying, exactly as
+            # the non-closing path would have.
+            return _advanced(
+                Recorded(outcome=state.outcome),
+                RecordOutcome(outcome=state.outcome),
+            )
+        case _:
+            return _rejected(state, f"unexpected {event.kind} in closing")
 
 
 def _from_recorded(state: Recorded, event: LoopEvent) -> Transition:
