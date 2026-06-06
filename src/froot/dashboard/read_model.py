@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from froot.dashboard.model import (
     BumpRow,
+    ClassGate,
     DashboardModel,
     Failure,
     Judgment,
@@ -29,6 +30,7 @@ from froot.dashboard.model import (
 )
 from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
+from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
 from froot.policy.naming import review_workflow_id, scan_workflow_id
 from froot.result import Ok
 
@@ -42,6 +44,10 @@ if TYPE_CHECKING:
         ReviewExecution,
         ScanExecution,
     )
+
+# The conservative fallback policy: empty allowlist, so the shadow gate holds
+# everything until a caller passes a real one (built from FROOT_AUTOMERGE_*).
+_DEFAULT_POLICY = AutonomyPolicy()
 
 _LIVE_STATUSES = frozenset({"running", "continued_as_new"})
 # Every way a bump can end without closing cleanly — all belong in the honest
@@ -141,6 +147,7 @@ def _bump_rows(
         rows.append(
             BumpRow(
                 repo=pr.repo,
+                loop=pr.loop,
                 package=pr.package or "?",
                 from_version=pr.from_version,
                 to_version=pr.to_version or "?",
@@ -241,14 +248,126 @@ def _judgment(rows: tuple[BumpRow, ...]) -> Judgment:
     )
 
 
-def _gate(rows: tuple[BumpRow, ...]) -> tuple[BumpRow, ...]:
-    """Open PRs awaiting a human, the most-aged first (the freshest last)."""
+def _decided_at(row: BumpRow) -> datetime | None:
+    """When a decided PR was decided — merge time, else open time as a proxy.
+
+    A merged PR has an exact merge instant; a closed-unmerged one does not (the
+    issues list froot reads carries no close timestamp), so it is windowed by
+    when it opened. The proxy only nudges a closed PR's window membership by its
+    own lifetime — close enough for a recency window measured in months.
+    """
+    return row.merged_at or row.opened_at
+
+
+def _within(when: datetime | None, now: datetime, window_days: int) -> bool:
+    """Whether ``when`` falls within ``window_days`` before ``now`` (pure)."""
+    if when is None:
+        return False
+    return (now - when).total_seconds() <= window_days * 86400.0
+
+
+def _class_gates(
+    now: datetime,
+    rows: tuple[BumpRow, ...],
+    repos: tuple[str, ...],
+    loops: tuple[Loop, ...],
+    policy: AutonomyPolicy,
+) -> tuple[ClassGate, ...]:
+    """The earned-autonomy standing of each (repo, loop) class (advisory).
+
+    Counts only PRs *decided within the window* — trust is recent, not lifetime
+    (§2.11) — so a class that stops shipping decays back below its gate. The
+    budget figures (approvals / reclaim per week) translate the record into the
+    steward-time MHE actually meters (§3.6): what the class costs now, and what
+    moving its gate would hand back.
+    """
+    weeks = max(policy.window_days / 7.0, 1.0)
+    gates: list[ClassGate] = []
+    for loop in loops:
+        for repo in repos:
+            decided_rows = [
+                r
+                for r in rows
+                if r.repo == repo
+                and r.loop == loop.value
+                and r.state in ("merged", "closed")
+                and _within(_decided_at(r), now, policy.window_days)
+            ]
+            merged_rows = [r for r in decided_rows if r.state == "merged"]
+            decided = len(decided_rows)
+            merged = len(merged_rows)
+            earned, blocker = class_earned(decided, merged, policy)
+            # Reclaim is the budget a gate *move* hands back — so it is zero
+            # until the class has actually earned the move. Counting the
+            # clean-and-green merges of an un-earned class would imply savings
+            # the gate would refuse (every PR stays held at "class not earned").
+            reclaimable = (
+                sum(
+                    1
+                    for r in merged_rows
+                    if r.verdict == "clean" and r.ci == "passed"
+                )
+                if earned
+                else 0
+            )
+            gates.append(
+                ClassGate(
+                    repo=repo,
+                    loop=loop.value,
+                    decided=decided,
+                    merged=merged,
+                    merge_rate=(merged / decided) if decided else None,
+                    earned=earned,
+                    blocker=blocker,
+                    approvals_per_week=round(merged / weeks, 2),
+                    reclaim_per_week=round(reclaimable / weeks, 2),
+                    window_days=policy.window_days,
+                )
+            )
+    return tuple(gates)
+
+
+def _gate(
+    rows: tuple[BumpRow, ...],
+    gates: tuple[ClassGate, ...],
+    policy: AutonomyPolicy,
+) -> tuple[BumpRow, ...]:
+    """Open PRs awaiting a human, most-aged first, each carrying a verdict.
+
+    The verdict is the shadow gate's: *would* this PR auto-merge under its
+    class's grant (advisory; nothing acts). The reason is the grant met, or the
+    first blocker to fix.
+    """
+    earned_by_class = {(g.repo, g.loop): (g.earned, g.blocker) for g in gates}
     open_rows = [r for r in rows if r.state == "open"]
     open_rows.sort(
         key=lambda r: r.age_hours if r.age_hours is not None else 0.0,
         reverse=True,
     )
-    return tuple(open_rows)
+    annotated: list[BumpRow] = []
+    for row in open_rows:
+        earned, blocker = earned_by_class.get(
+            (row.repo, row.loop), (False, "no record for this class")
+        )
+        verdict = pr_autonomy(
+            repo=row.repo,
+            verdict=row.verdict,
+            ci=row.ci,
+            earned=earned,
+            blocker=blocker,
+            policy=policy,
+        )
+        annotated.append(
+            row.model_copy(
+                update={
+                    "would_auto_merge": verdict.would_merge,
+                    "held_reason": (
+                        None if verdict.would_merge else verdict.reason
+                    ),
+                }
+            )
+        )
+    return tuple(annotated)
 
 
 def _failures(bumps: tuple[BumpExecution, ...]) -> tuple[Failure, ...]:
@@ -416,6 +535,7 @@ def assemble(
     now: datetime,
     repos: tuple[str, ...],
     loops: tuple[Loop, ...] = (Loop.DEPENDENCY_PATCH,),
+    policy: AutonomyPolicy = _DEFAULT_POLICY,
     scan_interval_seconds: int,
     review_interval_seconds: int,
     github: tuple[tuple[GithubPr, ...], str | None],
@@ -436,6 +556,7 @@ def assemble(
     run_telemetry, clickhouse_error = telemetry
 
     rows = _bump_rows(now, prs, bumps)
+    class_gates = _class_gates(now, rows, repos, loops, policy)
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
     return DashboardModel(
@@ -452,9 +573,10 @@ def assemble(
         ),
         scan_loops=_scan_loops(repos, loops, scans),
         track_record=_track_record(rows),
+        class_gates=class_gates,
         verification=_verification(rows),
         judgment=_judgment(rows),
-        gate=_gate(rows),
+        gate=_gate(rows, class_gates, policy),
         bumps=rows,
         failures=_failures(bumps),
         review_interval_seconds=review_interval_seconds,

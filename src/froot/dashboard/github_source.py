@@ -15,13 +15,14 @@ read at the boundary as untyped JSON and coerced here.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Final
 
 import httpx
 
 from froot.config.settings import GitHubSettings
 from froot.domain.base import Frozen
+from froot.domain.loop import Loop
 
 _API: Final = "https://api.github.com"
 _API_VERSION: Final = "2022-11-28"
@@ -39,6 +40,10 @@ class GithubPr(Frozen):
     repo: str
     number: int
     url: str
+    # The loop label (``dependency-patch`` | ``security-patch``); defaults to
+    # dependency-patch so a PR with no loop label (or a hand-built test row)
+    # attributes to the original loop rather than failing to construct.
+    loop: str = "dependency-patch"
     package: str | None
     from_version: str | None
     to_version: str | None
@@ -46,6 +51,24 @@ class GithubPr(Frozen):
     state: str  # open | merged | closed
     opened_at: datetime | None
     merged_at: datetime | None
+
+
+def _loop_from_labels(payload: Any) -> str:
+    """The loop a PR belongs to, from its labels (defaults dependency-patch).
+
+    Every froot PR carries its loop's label alongside the ``froot`` label, so
+    the loop is durable on the PR even after its Temporal run ages out.
+    """
+    labels = payload.get("labels")
+    names = (
+        {lbl.get("name") for lbl in labels if isinstance(lbl, dict)}
+        if isinstance(labels, list)
+        else set()
+    )
+    for loop in Loop:
+        if loop.value in names:
+            return loop.value
+    return Loop.DEPENDENCY_PATCH.value
 
 
 def parse_title(title: str) -> tuple[str, str] | None:
@@ -82,13 +105,21 @@ def parse_verdict(body: str | None) -> str | None:
 
 
 def _parse_dt(value: Any) -> datetime | None:
-    """Coerce a GitHub ISO-8601 timestamp into an aware datetime (boundary)."""
+    """Coerce a GitHub ISO-8601 timestamp into an *aware* datetime (boundary).
+
+    GitHub stamps everything ``...Z`` (UTC), which ``fromisoformat`` parses as
+    aware — but a missing/odd offset would yield a naive datetime, and the
+    read-model subtracts these against an aware ``now`` (a naive operand raises
+    ``TypeError`` and would blank the whole page). So any naive result is
+    pinned to UTC here, at the one boundary, the way the other readers do.
+    """
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _to_pr(repo: str, payload: Any) -> GithubPr | None:
@@ -112,6 +143,7 @@ def _to_pr(repo: str, payload: Any) -> GithubPr | None:
         repo=repo,
         number=int(payload["number"]),
         url=str(payload.get("html_url", "")),
+        loop=_loop_from_labels(payload),
         package=package,
         from_version=parse_from_version(body),
         to_version=to_version,

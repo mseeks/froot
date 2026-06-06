@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
 _reconcile_log = logging.getLogger("froot.reconcile")
+_scan_log = logging.getLogger("froot.scan")
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -66,7 +67,7 @@ async def _select_candidates(
     target: TargetRepo,
     package_manager: PackageManager,
     manifest_dir: Path,
-) -> tuple[Candidate, ...]:
+) -> tuple[int, tuple[Candidate, ...]]:
     """Gather this loop's signal from the checkout and select its candidates.
 
     The one genuinely per-loop seam: dependency-patch reads the available
@@ -74,13 +75,17 @@ async def _select_candidates(
     asks OSV for advisories, and picks the lowest version clearing each. The
     impure sources are lazy-imported per arm so neither drags the other's stack
     into a sandbox. Both feed a pure selection policy.
+
+    Returns ``(considered, candidates)`` — ``considered`` is the size of the
+    upstream signal (available upgrades / advisories found) so the scan can make
+    its selectivity legible (how much was seen versus how much was kept).
     """
     match loop:
         case Loop.DEPENDENCY_PATCH:
             from froot.policy.candidates import select_patch_candidates
 
             upgrades = await package_manager.list_upgrades(target, manifest_dir)
-            return select_patch_candidates(upgrades)
+            return len(upgrades), select_patch_candidates(upgrades)
         case Loop.SECURITY_PATCH:
             return await _select_security_candidates(
                 target, package_manager, manifest_dir
@@ -90,35 +95,68 @@ async def _select_candidates(
 
 async def _select_security_candidates(
     target: TargetRepo, package_manager: PackageManager, manifest_dir: Path
-) -> tuple[Candidate, ...]:
-    """Security signal: installed set, OSV advisories, clearing targets."""
+) -> tuple[int, tuple[Candidate, ...]]:
+    """Security signal: installed set, OSV advisories, clearing targets.
+
+    ``considered`` is the count of advisories OSV returned for the installed
+    set — the vulnerabilities in scope this tick, before selection narrows to
+    the ones a forward-stable bump can actually clear.
+    """
     from froot.adapters.osv import OsvAdvisorySource
     from froot.policy.candidates import select_security_candidates
 
     installed = await package_manager.list_installed(target, manifest_dir)
     advisories = await OsvAdvisorySource().advisories(installed)
-    return select_security_candidates(installed, advisories)
+    return len(advisories), select_security_candidates(installed, advisories)
 
 
 @activity.defn
 async def scan_candidates(
     params: ScanCandidatesInput,
 ) -> tuple[Candidate, ...]:
-    """Check out the repo and select this loop's candidates."""
+    """Check out the repo and select this loop's candidates.
+
+    Emits the tick's selectivity — how much upstream signal was considered
+    versus how much was kept — as span attributes (when ``FROOT_OTEL`` is on)
+    and as a structured ``scan_tick`` log, so the signal stage is legible in the
+    run ledger even on a tick that proposes nothing.
+    """
     from froot.adapters.github import GitHubForge
     from froot.adapters.registry import package_manager_for
+    from froot.adapters.telemetry import set_span_attributes
 
     forge = GitHubForge()
     package_manager = package_manager_for(params.target.ecosystem)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(params.target, workspace)
-        candidates = await _select_candidates(
+        considered, candidates = await _select_candidates(
             params.loop,
             params.target,
             package_manager,
             _manifest_dir(params.target, workspace),
         )
+    selected = len(candidates)
+    dropped = max(considered - selected, 0)
+    set_span_attributes(
+        scan_loop=params.loop.value,
+        scan_repo=params.target.repo.slug,
+        scan_considered=considered,
+        scan_selected=selected,
+        scan_dropped=dropped,
+    )
+    _scan_log.info(
+        json.dumps(
+            {
+                "event": "scan_tick",
+                "loop": params.loop.value,
+                "repo": params.target.repo.slug,
+                "considered": considered,
+                "selected": selected,
+                "dropped": dropped,
+            }
+        )
+    )
     return candidates
 
 
@@ -313,7 +351,7 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(target, workspace)
-        candidates = await _select_candidates(
+        _considered, candidates = await _select_candidates(
             loop, target, package_manager, _manifest_dir(target, workspace)
         )
     closures = reconciliations(open_prs, candidates, loop)

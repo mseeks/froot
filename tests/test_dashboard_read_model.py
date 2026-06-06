@@ -11,6 +11,8 @@ from froot.dashboard.temporal_source import (
     ReviewExecution,
     ScanExecution,
 )
+from froot.domain.loop import Loop
+from froot.policy.autonomy import AutonomyPolicy
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 REPO = "mseeks/revisionist"
@@ -388,3 +390,190 @@ def test_review_record_ignores_incomplete_reviews():
     model = _assemble([], [], [], pr_reviews=pr_reviews)
     assert model.review_record.reviewed == 1  # only the completed one
     assert model.review_record.flagged == 1
+
+
+# ── Earned-autonomy class gates (the shadow gate) ────────────────────────────
+def _allow(**overrides: object) -> AutonomyPolicy:
+    base = {
+        "min_rate": 0.95,
+        "min_decided": 3,
+        "window_days": 90,
+        "allowlisted_repos": frozenset({REPO}),
+    }
+    base.update(overrides)
+    return AutonomyPolicy(**base)  # type: ignore[arg-type]
+
+
+def _assemble_p(
+    prs: list[GithubPr],
+    bumps: list[BumpExecution],
+    policy: AutonomyPolicy,
+) -> DashboardModel:
+    return read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        loops=(Loop.DEPENDENCY_PATCH,),
+        policy=policy,
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=(tuple(prs), None),
+        temporal=(((), tuple(bumps), (), ()), None),
+        telemetry=_telemetry_off(),
+    )
+
+
+def _clean_green_merge(
+    number: int, package: str
+) -> tuple[GithubPr, BumpExecution]:
+    """A merged PR plus the Temporal bump giving it a clean+green reading."""
+    opened = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    merged = datetime(2026, 5, 20, 12, 15, tzinfo=UTC)
+    pr = _pr(
+        number, package, "merged", verdict="clean", opened=opened, merged=merged
+    )
+    bump = _bump(
+        f"{package}-1.0.0",
+        "completed",
+        pr_number=number,
+        verdict="clean",
+        ci="passed",
+    )
+    return pr, bump
+
+
+def test_class_gate_earned_for_clean_green_history():
+    pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3, 4)]
+    prs = [p for p, _ in pairs]
+    bumps = [b for _, b in pairs]
+    model = _assemble_p(prs, bumps, _allow())
+    assert len(model.class_gates) == 1
+    g = model.class_gates[0]
+    assert (g.repo, g.loop) == (REPO, "dependency-patch")
+    assert g.decided == 4
+    assert g.merged == 4
+    assert g.merge_rate == 1.0
+    assert g.earned is True
+    assert g.blocker is None
+    # 4 merges over a 90d window (~12.86 weeks); all clean+green -> reclaimable.
+    assert g.approvals_per_week > 0
+    assert g.reclaim_per_week == g.approvals_per_week
+
+
+def test_class_gate_not_earned_below_min_decided():
+    pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2)]
+    model = _assemble_p(
+        [p for p, _ in pairs], [b for _, b in pairs], _allow(min_decided=3)
+    )
+    g = model.class_gates[0]
+    assert g.decided == 2
+    assert g.earned is False
+    assert g.blocker == "only 2/3 decided recently"
+
+
+def test_class_gate_windows_out_old_decisions():
+    # One recent merge, one merged before the 90-day window opened.
+    recent = _pr(
+        1,
+        "fresh",
+        "merged",
+        verdict="clean",
+        opened=datetime(2026, 5, 1, tzinfo=UTC),
+        merged=datetime(2026, 5, 1, 0, 10, tzinfo=UTC),
+    )
+    old = _pr(
+        2,
+        "stale",
+        "merged",
+        verdict="clean",
+        opened=datetime(2026, 1, 1, tzinfo=UTC),
+        merged=datetime(2026, 1, 1, 0, 10, tzinfo=UTC),
+    )
+    model = _assemble_p([recent, old], [], _allow())
+    g = model.class_gates[0]
+    assert g.decided == 1  # the old merge fell out of the window
+
+
+def test_class_gate_reclaim_excludes_unverified_merges():
+    # A merged PR with a clean body verdict but NO CI reading is not counted as
+    # reclaimable: without a green oracle we cannot claim it would auto-merge.
+    pr = _pr(
+        1,
+        "lodash",
+        "merged",
+        verdict="clean",
+        opened=datetime(2026, 5, 25, tzinfo=UTC),
+        merged=datetime(2026, 5, 25, 0, 10, tzinfo=UTC),
+    )
+    model = _assemble_p([pr], [], _allow(min_decided=1))
+    g = model.class_gates[0]
+    assert g.merged == 1
+    assert g.reclaim_per_week == 0.0
+
+
+def test_class_gate_reclaim_is_zero_until_earned():
+    # Two clean+green merges, but min_decided=5 -> the class is NOT earned, so
+    # reclaim is zero: an un-earned class's gate would not move, hence reclaims
+    # nothing, even though clean-and-green merges exist.
+    pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2)]
+    model = _assemble_p(
+        [p for p, _ in pairs], [b for _, b in pairs], _allow(min_decided=5)
+    )
+    g = model.class_gates[0]
+    assert g.earned is False
+    assert g.merged == 2
+    assert g.reclaim_per_week == 0.0
+    assert g.approvals_per_week > 0  # the cost is still real
+
+
+def test_gate_marks_open_pr_would_auto_merge_on_earned_class():
+    history = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3)]
+    prs = [p for p, _ in history]
+    bumps = [b for _, b in history]
+    # An open, clean PR with a green CI reading on the earned allowlisted class.
+    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
+    bumps.append(
+        _bump(
+            "axios-1.0.0",
+            "completed",
+            pr_number=9,
+            verdict="clean",
+            ci="passed",
+        )
+    )
+    model = _assemble_p(prs, bumps, _allow())
+    open_row = next(r for r in model.gate if r.pr_number == 9)
+    assert open_row.would_auto_merge is True
+    assert open_row.held_reason is None
+
+
+def test_gate_holds_open_pr_with_reason_when_not_allowlisted():
+    history = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3)]
+    prs = [p for p, _ in history]
+    bumps = [b for _, b in history]
+    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
+    bumps.append(
+        _bump(
+            "axios-1.0.0",
+            "completed",
+            pr_number=9,
+            verdict="clean",
+            ci="passed",
+        )
+    )
+    # Earned history, but the repo is NOT allowlisted -> held on the switch.
+    model = _assemble_p(prs, bumps, _allow(allowlisted_repos=frozenset()))
+    open_row = next(r for r in model.gate if r.pr_number == 9)
+    assert open_row.would_auto_merge is False
+    assert open_row.held_reason == "auto-merge not enabled for this repo"
+
+
+def test_gate_holds_open_pr_on_pending_ci():
+    history = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3)]
+    prs = [p for p, _ in history]
+    bumps = [b for _, b in history]
+    # Open, clean, but no CI reading yet -> held on CI even though earned.
+    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
+    model = _assemble_p(prs, bumps, _allow())
+    open_row = next(r for r in model.gate if r.pr_number == 9)
+    assert open_row.would_auto_merge is False
+    assert open_row.held_reason == "CI pending"

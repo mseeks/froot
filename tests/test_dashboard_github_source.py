@@ -86,4 +86,58 @@ def test_to_pr_distinguishes_open_from_closed_unmerged():
 
 def test_to_pr_skips_plain_issues():
     assert to_pr("acme/widgets", {"number": 1, "title": "a bug"}) is None
+
+
+def test_to_pr_pins_offsetless_timestamp_to_utc():
+    # A timestamp lacking a Z/offset would parse naive and later blow up the
+    # read-model's aware-vs-naive subtraction; the boundary coerces it to UTC.
+    pr = to_pr(
+        "acme/widgets",
+        {
+            "number": 11,
+            "title": "deps: bump x to 1.0.1",
+            "state": "open",
+            "created_at": "2026-06-02T19:45:00",  # no 'Z'
+            "pull_request": {"merged_at": None},
+        },
+    )
+    assert pr is not None
+    assert pr.opened_at is not None
+    assert pr.opened_at.tzinfo is not None  # aware, not naive
+
+
+def _pr_with_labels(labels: list[dict[str, str]] | None):
+    return to_pr(
+        "acme/widgets",
+        {
+            "number": 5,
+            "title": "deps: bump x to 1.0.1",
+            "state": "open",
+            "labels": labels,
+            "pull_request": {"merged_at": None},
+        },
+    )
+
+
+def test_to_pr_reads_security_patch_loop_from_label():
+    pr = _pr_with_labels([{"name": "froot"}, {"name": "security-patch"}])
+    assert pr is not None
+    assert pr.loop == "security-patch"
+
+
+def test_to_pr_defaults_loop_to_dependency_patch():
+    # The froot label alone (the original loop carried no extra label).
+    pr = _pr_with_labels([{"name": "froot"}])
+    assert pr is not None
+    assert pr.loop == "dependency-patch"
+
+
+def test_to_pr_defaults_loop_when_labels_absent_or_malformed():
+    missing = _pr_with_labels(None)
+    assert missing is not None
+    assert missing.loop == "dependency-patch"
+    # A non-dict label entry must not crash the parse.
+    pr = _pr_with_labels([{"name": "froot"}, "weird"])  # type: ignore[list-item]
+    assert pr is not None
+    assert pr.loop == "dependency-patch"
     assert to_pr("acme/widgets", "not a dict") is None

@@ -40,6 +40,28 @@ def otel_enabled() -> bool:
     return TelemetrySettings().otel
 
 
+def set_span_attributes(**attributes: int | float | str | bool) -> None:
+    """Annotate the activity's current span with froot-namespaced attributes.
+
+    A thin, dependency-light way for an activity to record *what it decided* —
+    e.g. how many upgrades it saw versus how many candidates it kept — onto the
+    span the Temporal tracing interceptor already opened. Keys are prefixed
+    ``froot.`` so they never collide with the interceptor's own attributes.
+
+    Lazy-imports OpenTelemetry inside the body, so no otel import enters any
+    module's top-level graph (the Temporal workflow sandbox stays clean), and is
+    a no-op when ``FROOT_OTEL`` is off — so tests and local runs add no spans
+    and pay nothing. Call it from an activity body, never from a workflow.
+    """
+    if not otel_enabled():
+        return
+    from opentelemetry import trace
+
+    span = trace.get_current_span()
+    for key, value in attributes.items():
+        span.set_attribute(f"froot.{key}", value)
+
+
 def setup_tracing(service_name: str) -> None:
     """Install a global TracerProvider exporting OTLP/HTTP to the collector.
 
