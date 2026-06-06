@@ -265,6 +265,28 @@ class Reliability(Frozen):
     window_days: int
 
 
+class Probes(Frozen):
+    """Adversarial canary probes — does the guardrail still bite? (§2.11).
+
+    A canary is a deliberately-bad bump planted to test the guardrail; a healthy
+    loop must refuse to merge it. These counts are kept **strictly apart** from
+    the genuine track record and defect rate — a synthetic failure must never
+    pollute the real bearings — and shown on their own. ``escaped > 0`` is the
+    alarm: a known-bad bump that landed means the guardrail has a hole.
+
+    Attributes:
+        caught: Probes the guardrail refused (closed, or never landed).
+        escaped: Probes that merged anyway — a guardrail hole (should be 0).
+        pending: Probes still in flight (open, no verdict yet).
+        total: All canary probes seen.
+    """
+
+    caught: int
+    escaped: int
+    pending: int
+    total: int
+
+
 class Judgment(Frozen):
     """The model's changelog-verdict mix and its calibration against CI.
 
@@ -364,6 +386,7 @@ class DashboardModel(Frozen):
         class_gates: The earned-autonomy standing per (repo, loop) — advisory.
         verification: The CI-oracle breakdown.
         reliability: Did the merges hold post-merge (the outcome leg, coarse).
+        probes: Adversarial canary results, kept apart from the real bearings.
         judgment: The model-verdict mix and calibration.
         gate: Open PRs awaiting a human, the freshest last.
         bumps: Every proposed bump, newest first (the detail behind the stats).
@@ -384,6 +407,7 @@ class DashboardModel(Frozen):
     class_gates: tuple[ClassGate, ...]
     verification: Verification
     reliability: Reliability
+    probes: Probes
     judgment: Judgment
     gate: tuple[BumpRow, ...]
     bumps: tuple[BumpRow, ...]

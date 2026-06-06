@@ -389,6 +389,44 @@ def _reliability(model: DashboardModel) -> str:
     )
 
 
+def _probes(model: DashboardModel) -> str:
+    p = model.probes
+    stats = "".join(
+        (
+            _stat(p.caught, "caught"),
+            _stat(p.escaped, "escaped"),
+            _stat(p.pending, "pending"),
+        )
+    )
+    if p.total == 0:
+        note = (
+            '<p class="note">No adversarial probes yet. A <b>canary</b> '
+            "&mdash; a deliberately-bad bump &mdash; tests whether the "
+            "guardrail still bites; it needs no volume to be informative, so "
+            "it carries weight while the rate-based bearings are thin "
+            "(&sect;2.11).</p>"
+        )
+    elif p.escaped:
+        note = (
+            f'<p class="note"><span class="bad">&#9888; <b>{p.escaped}</b> '
+            "canary(s) <b>escaped</b> &mdash; a known-bad bump landed, so the "
+            "guardrail has a hole.</span> This is the alarm the probe exists "
+            "to raise.</p>"
+        )
+    else:
+        note = _why(
+            '<p class="note">Every canary was <b>caught</b> &mdash; the '
+            "guardrail refused the planted bad bumps. Probes are scored on a "
+            "strict bar (a canary must never merge) and kept <b>out</b> of the "
+            "track record and defect rate, so a synthetic failure never "
+            "pollutes the real bearings.</p>"
+        )
+    return (
+        "<section><h2>Adversarial probes &middot; does the guardrail bite?</h2>"
+        f'<div class="stats">{stats}</div>{note}</section>'
+    )
+
+
 def _judgment(model: DashboardModel) -> str:
     j = model.judgment
     stats = "".join(
@@ -772,6 +810,7 @@ def page(model: DashboardModel) -> str:
                 _class_gates(model),
                 _verification(model),
                 _reliability(model),
+                _probes(model),
                 _judgment(model),
                 _gate(model),
                 _bumps(model),

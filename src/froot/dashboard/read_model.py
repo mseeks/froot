@@ -19,6 +19,7 @@ from froot.dashboard.model import (
     DashboardModel,
     Failure,
     Judgment,
+    Probes,
     Reliability,
     ReviewLoop,
     ReviewRecord,
@@ -32,6 +33,7 @@ from froot.dashboard.model import (
 from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
+from froot.policy.canary import is_canary, score_probe
 from froot.policy.naming import review_workflow_id, scan_workflow_id
 from froot.result import Ok
 
@@ -253,6 +255,21 @@ def _reliability(rows: tuple[BumpRow, ...], window_days: int) -> Reliability:
         determined=determined,
         defect_rate=((broke + reverted) / determined) if determined else None,
         window_days=window_days,
+    )
+
+
+def _probes(canary_rows: tuple[BumpRow, ...]) -> Probes:
+    """Tally the adversarial canary probes — caught / escaped / pending.
+
+    These rows are the synthetic bad bumps; they are scored on the strict bar
+    (a canary must never merge) and kept out of every genuine bearing.
+    """
+    scored = [score_probe(r.state) for r in canary_rows]
+    return Probes(
+        caught=sum(1 for s in scored if s == "caught"),
+        escaped=sum(1 for s in scored if s == "escaped"),
+        pending=sum(1 for s in scored if s == "pending"),
+        total=len(scored),
     )
 
 
@@ -593,7 +610,12 @@ def assemble(
     (scans, bumps, reviews, pr_reviews), temporal_error = temporal
     run_telemetry, clickhouse_error = telemetry
 
-    rows = _bump_rows(now, prs, bumps, outcomes or {})
+    all_rows = _bump_rows(now, prs, bumps, outcomes or {})
+    # Canary probes are synthetic bad bumps — keep them out of every genuine
+    # bearing (track record, defect rate, gates) so a planted failure can never
+    # pollute the real reputation; they get their own tally.
+    canary_rows = tuple(r for r in all_rows if is_canary(r.to_version))
+    rows = tuple(r for r in all_rows if not is_canary(r.to_version))
     class_gates = _class_gates(now, rows, repos, loops, policy)
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
@@ -614,6 +636,7 @@ def assemble(
         class_gates=class_gates,
         verification=_verification(rows),
         reliability=_reliability(rows, reliability_window_days),
+        probes=_probes(canary_rows),
         judgment=_judgment(rows),
         gate=_gate(rows, class_gates, policy),
         bumps=rows,

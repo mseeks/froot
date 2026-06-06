@@ -391,6 +391,23 @@ def test_reliability_panel_renders_outcomes_and_defect_rate():
     assert "50%" in html  # 1 of 2 determined was a defect
 
 
+def test_probes_panel_empty_state():
+    html = render.page(_model())
+    assert "Adversarial probes" in html
+    assert "No adversarial probes yet" in html
+
+
+def test_probes_panel_alarms_when_a_canary_escapes():
+    # A merged canary (to 99.99.99) is a guardrail hole — the panel alarms,
+    # and the canary stays out of the genuine bumps table.
+    prs = [
+        _pr(7, "evil", "merged", to_version="99.99.99", opened=NOW, merged=NOW)
+    ]
+    html = render.page(_model_outcomes(prs, {}))
+    assert "escaped" in html
+    assert "guardrail has a hole" in html
+
+
 def test_bumps_table_has_held_column_and_per_row_tag():
     prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
     html = render.page(_model_outcomes(prs, {(REPO, 1): "reverted"}))

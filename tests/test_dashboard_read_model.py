@@ -510,6 +510,40 @@ def test_class_gate_reclaim_excludes_unverified_merges():
     assert g.reclaim_per_week == 0.0
 
 
+# ── Adversarial canary probes (segregation) ──────────────────────────────────
+def test_canary_rows_excluded_from_bearings_and_tallied_in_probes():
+    # A real merged bump plus two canaries (to 99.99.99): one closed (caught),
+    # one merged (escaped). The canaries must NOT touch the genuine bearings.
+    prs = [
+        _pr(1, "real", "merged", to_version="1.0.1", opened=NOW, merged=NOW),
+        _pr(2, "canary-closed", "closed", to_version="99.99.99", opened=NOW),
+        _pr(
+            3,
+            "canary-merged",
+            "merged",
+            to_version="99.99.99",
+            opened=NOW,
+            merged=NOW,
+        ),
+    ]
+    model = _assemble(prs, [], [])
+    # genuine bearings see only the one real bump
+    assert model.track_record.opened == 1
+    assert model.track_record.merged == 1
+    assert [r.package for r in model.bumps] == ["real"]
+    # the canaries are tallied apart
+    assert model.probes.total == 2
+    assert model.probes.caught == 1  # the closed one
+    assert model.probes.escaped == 1  # the merged one — a guardrail hole
+    assert model.probes.pending == 0
+
+
+def test_no_canaries_means_empty_probes():
+    prs = [_pr(1, "real", "merged", to_version="1.0.1", opened=NOW, merged=NOW)]
+    p = _assemble(prs, [], []).probes
+    assert (p.total, p.caught, p.escaped, p.pending) == (0, 0, 0, 0)
+
+
 # ── Reliability (post-merge outcome leg) ─────────────────────────────────────
 def _assemble_outcomes(
     prs: list[GithubPr], outcomes: dict[tuple[str, int], str]
