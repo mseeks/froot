@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -91,6 +93,46 @@ async def test_scan_candidates_security_loop(
     assert [candidate.target for candidate in result] == [ver("1.4.3")]
     assert result[0].justification is not None
     assert "GHSA-1" in result[0].justification
+
+
+async def test_scan_candidates_logs_considered_and_selected(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # Two upgrades available, but only one yields a patch candidate (the other
+    # is a major bump) — so the tick considered 2 and selected 1, dropped 1.
+    upgrades = (
+        AvailableUpgrade(
+            package="left-pad",
+            ecosystem=Ecosystem.NPM,
+            current=ver("1.4.2"),
+            available=(ver("1.4.3"),),  # a patch -> kept
+        ),
+        AvailableUpgrade(
+            package="lodash",
+            ecosystem=Ecosystem.NPM,
+            current=ver("4.0.0"),
+            available=(ver("5.0.0"),),  # only a major -> dropped
+        ),
+    )
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(upgrades),
+    )
+    with caplog.at_level("INFO", logger="froot.scan"):
+        result = await activities.scan_candidates(
+            ScanCandidatesInput(target=make_repo())
+        )
+    assert len(result) == 1  # only left-pad's patch
+    ticks = [r for r in caplog.records if r.name == "froot.scan"]
+    assert len(ticks) == 1
+    record = json.loads(ticks[0].getMessage())
+    assert record["event"] == "scan_tick"
+    assert record["loop"] == "dependency-patch"
+    assert record["considered"] == 2
+    assert record["selected"] == 1
+    assert record["dropped"] == 1
 
 
 async def test_scan_candidates_selects_package_manager_by_ecosystem(

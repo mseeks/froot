@@ -59,6 +59,9 @@ class BumpRow(Frozen):
 
     Attributes:
         repo: The ``owner/name`` slug.
+        loop: Which loop proposed it (``dependency-patch`` /
+            ``security-patch``), from the PR's loop label — so the two loops'
+            records never mix.
         package: The bumped dependency.
         from_version: The version bumped from, if known.
         to_version: The version bumped to.
@@ -73,9 +76,13 @@ class BumpRow(Frozen):
         merged_at: When the PR was merged, if it was.
         ttm_minutes: Time-to-merge in minutes (merged - opened), if merged.
         age_hours: Age in hours for a still-open PR (now - opened), or ``None``.
+        would_auto_merge: For an open PR, whether it would auto-merge under the
+            advisory earned-autonomy grant (the shadow gate; nothing acts).
+        held_reason: Why an open PR would *not* auto-merge, the first blocker.
     """
 
     repo: str
+    loop: str = "dependency-patch"
     package: str
     from_version: str | None
     to_version: str
@@ -88,6 +95,43 @@ class BumpRow(Frozen):
     merged_at: datetime | None
     ttm_minutes: float | None
     age_hours: float | None
+    would_auto_merge: bool = False
+    held_reason: str | None = None
+
+
+class ClassGate(Frozen):
+    """The earned-autonomy standing of one (repo, loop) class — advisory only.
+
+    The MHE economics of approval (§3.6) made legible: a class earns its gate
+    move with a high enough approval rate over enough recently-decided PRs,
+    and the budget framing shows what moving the gate would reclaim.
+
+    Attributes:
+        repo: The ``owner/name`` slug.
+        loop: The loop this class is for.
+        decided: PRs decided (merged or closed) in the recent window.
+        merged: How many of those were merged.
+        merge_rate: ``merged / decided``, or ``None`` if none decided.
+        earned: Whether the class has earned its gate move under the policy.
+        blocker: Why it has not, if it has not (else ``None``).
+        approvals_per_week: The steward approvals this class costs now
+            (merges per week over the window) — the current budget draw.
+        reclaim_per_week: How many of those a gate move would auto-merge
+            (the clean-and-green ones), i.e. the budget reclaimed — ``0`` until
+            the class is ``earned``, since an un-earned class reclaims nothing.
+        window_days: The look-back window the figures cover.
+    """
+
+    repo: str
+    loop: str
+    decided: int
+    merged: int
+    merge_rate: float | None
+    earned: bool
+    blocker: str | None
+    approvals_per_week: float
+    reclaim_per_week: float
+    window_days: int
 
 
 class Failure(Frozen):
@@ -281,6 +325,7 @@ class DashboardModel(Frozen):
         sources: Per-source health for this request.
         scan_loops: Liveness of each repo's scan schedule.
         track_record: The reputation headline.
+        class_gates: The earned-autonomy standing per (repo, loop) — advisory.
         verification: The CI-oracle breakdown.
         judgment: The model-verdict mix and calibration.
         gate: Open PRs awaiting a human, the freshest last.
@@ -299,6 +344,7 @@ class DashboardModel(Frozen):
     sources: tuple[SourceHealth, ...]
     scan_loops: tuple[ScanLoop, ...]
     track_record: TrackRecord
+    class_gates: tuple[ClassGate, ...]
     verification: Verification
     judgment: Judgment
     gate: tuple[BumpRow, ...]

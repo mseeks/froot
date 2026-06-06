@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from froot.dashboard.model import (
         BumpRow,
+        ClassGate,
         DashboardModel,
         ReviewLoop,
         ReviewRow,
@@ -248,6 +249,78 @@ def _track_record(model: DashboardModel) -> str:
     )
 
 
+def _rate_cell(rate: float | None) -> str:
+    """A class's approval rate as a percent, or an em-dash if none decided."""
+    if rate is None:
+        return '<span class="mut">—</span>'
+    return f"{rate * 100:.0f}%"
+
+
+def _earned_cell(g: ClassGate) -> str:
+    """A class's gate standing: a green 'earned', else the muted blocker."""
+    if g.earned:
+        return f'{_dot("ok")}<span class="ok">earned</span>'
+    blocker = escape(g.blocker or "not earned")
+    return f'{_dot("mut")}<span class="mut">{blocker}</span>'
+
+
+def _budget_cell(g: ClassGate) -> str:
+    """The gate in steward-time: approvals/week now &rarr; reclaimable/week."""
+    return (
+        f'<span class="mono">{g.approvals_per_week:.1f}</span> appr'
+        f' <span class="mut">&rarr; {g.reclaim_per_week:.1f} reclaimable</span>'
+    )
+
+
+def _class_gates(model: DashboardModel) -> str:
+    """The earned-autonomy panel — the shadow gate's per-class standing.
+
+    Read-only: it renders whether each (repo, loop) class *would* have earned a
+    gate move, and the steward-budget that move would reclaim. Nothing acts.
+    """
+    gates = model.class_gates
+    if not gates:
+        body = (
+            '<p class="note">No classes yet &mdash; a (repo, loop) earns a '
+            "gate move from its own track record.</p>"
+        )
+    else:
+        rows = "".join(
+            "<tr>"
+            f'<td class="mono">{escape(g.repo)}</td>'
+            f'<td class="mut">{escape(g.loop)}</td>'
+            f"<td>{g.decided} in {g.window_days}d</td>"
+            f"<td>{_rate_cell(g.merge_rate)}</td>"
+            f"<td>{_earned_cell(g)}</td>"
+            f"<td>{_budget_cell(g)}</td>"
+            "</tr>"
+            for g in gates
+        )
+        body = (
+            "<table><thead><tr><th>repo</th><th>loop</th><th>decided</th>"
+            "<th>rate</th><th>gate</th><th>budget / week</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    note = (
+        '<p class="note">Each <b>class</b> is one loop on one repo &mdash; a '
+        "distinct trust unit (a security patch is not a version bump, and they "
+        "never share a record). A class earns its gate from a high enough "
+        "<b>approval rate</b> over enough recently-<b>decided</b> PRs; the "
+        "window keeps trust recent, not lifetime. <b>Budget</b> reads the "
+        "gate in steward-time &mdash; approvals/week is what the class costs "
+        "a human now, reclaimable is the clean-and-green slice a gate move "
+        "would hand back. <b>Advisory only</b>: auto-merge is allowlist-gated "
+        "and off, and the approval rate counts a human <i>merge</i>, not a "
+        "confirmed-good outcome &mdash; with no revert tracking yet, a high "
+        "rate can still mask rubber-stamping (&sect;3.7). Rollback tracking "
+        "and sampled review come before anything acts.</p>"
+    )
+    return (
+        "<section><h2>Earned autonomy &middot; the shadow gate</h2>"
+        f"{body}{_why(note)}</section>"
+    )
+
+
 def _verification(model: DashboardModel) -> str:
     v = model.verification
     stats = "".join(
@@ -302,6 +375,19 @@ def _judgment(model: DashboardModel) -> str:
     )
 
 
+def _shadow_badge(row: BumpRow) -> str:
+    """Whether this open PR *would* auto-merge under its class's grant.
+
+    Advisory: a green 'would auto-merge' means every condition is met and the
+    human approval is the only thing still in the way; otherwise the first
+    blocker, muted, so the held reason is the thing to fix.
+    """
+    if row.would_auto_merge:
+        return '<span class="ok">would auto-merge</span>'
+    reason = row.held_reason or "held"
+    return f'<span class="mut">held &middot; {escape(reason)}</span>'
+
+
 def _gate(model: DashboardModel) -> str:
     now = model.generated_at
     if not model.gate:
@@ -311,13 +397,24 @@ def _gate(model: DashboardModel) -> str:
             "<tr>"
             f'<td class="mono">{escape(row.package)}</td>'
             f"<td>{escape(_ago(row.opened_at, now))}</td>"
+            f"<td>{_shadow_badge(row)}</td>"
             f"<td>{_pr_link(row)}</td>"
             "</tr>"
             for row in model.gate
         )
+        note = _why(
+            '<p class="note">The <b>shadow gate</b> column is advisory &mdash; '
+            "froot acts on nothing. A green &lsquo;would auto-merge&rsquo; "
+            "means this PR met its class&rsquo;s grant and the human approval "
+            "is the only remaining step; it rests on the single CI oracle and "
+            "a merge-rate record, which (esp. for a security patch) is not the "
+            "same as a confirmed-good or security-reviewed outcome. You still "
+            "own every merge.</p>"
+        )
         body = (
-            "<table><thead><tr><th>package</th><th>waiting</th><th>pr</th>"
-            f"</tr></thead><tbody>{rows}</tbody></table>"
+            "<table><thead><tr><th>package</th><th>waiting</th>"
+            "<th>shadow gate</th><th>pr</th>"
+            f"</tr></thead><tbody>{rows}</tbody></table>{note}"
         )
     return (
         "<section><h2>Approval gate &middot; what a human owns</h2>"
@@ -500,10 +597,13 @@ def _footer() -> str:
         "<b>Authority envelope.</b> Stage 1 &mdash; froot holds "
         "<b>write authority</b> only: it opens PRs, a human approves every "
         "merge (commit authority = none). Trust, when any is granted, is "
-        "earned, narrow to npm patch bumps, conditional on its environment "
-        '(judge <span class="mono">gemma4:e4b</span>, lockfile-only regen), '
-        "revocable, and time-expiring. Today it records the track record; it "
-        "does not yet act on it.<br>"
+        "earned, narrow to a single loop on a single repo (a version bump is "
+        "not a security patch; they never share a record), conditional on its "
+        'environment (judge <span class="mono">gemma4:e4b</span>, '
+        "lockfile-only regen), revocable, and time-expiring. Today it records "
+        "the track "
+        "record and renders a <b>shadow gate</b> &mdash; a dry run of the "
+        "auto-merge decision that still acts on nothing.<br>"
         "Everything above is derived on this request from GitHub (outcomes) + "
         "Temporal (runs) + ClickHouse (telemetry). froot keeps no database; "
         "reload to recompute."
@@ -570,6 +670,9 @@ def _dep_glance(model: DashboardModel) -> str:
         _glance(t.opened, "proposed"),
         _glance(rate, "merged"),
     ]
+    if model.class_gates:
+        earned = sum(1 for g in model.class_gates if g.earned)
+        items.append(_glance(f"{earned}/{len(model.class_gates)}", "earned"))
     if t.open_now:
         items.append(_glance(t.open_now, "awaiting you"))
     return "".join(items)
@@ -623,6 +726,7 @@ def page(model: DashboardModel) -> str:
             (
                 _heartbeat(model),
                 _track_record(model),
+                _class_gates(model),
                 _verification(model),
                 _judgment(model),
                 _gate(model),

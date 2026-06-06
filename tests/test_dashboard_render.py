@@ -7,10 +7,12 @@ from froot.dashboard import read_model, render
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import ActivityStat, DashboardModel, RunTelemetry
 from froot.dashboard.temporal_source import (
+    BumpExecution,
     PrReviewExecution,
     ReviewExecution,
     ScanExecution,
 )
+from froot.policy.autonomy import AutonomyPolicy
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 REPO = "mseeks/revisionist"
@@ -240,3 +242,116 @@ def test_loop_header_carries_an_at_a_glance():
 def test_framing_notes_fold_behind_details():
     html = render.page(_model())
     assert 'details class="why"' in html
+
+
+# ── Earned-autonomy panel + shadow-gate badge ────────────────────────────────
+def _model_p(
+    prs: Sequence[GithubPr],
+    bumps: Sequence[BumpExecution],
+    policy: AutonomyPolicy,
+) -> DashboardModel:
+    telemetry = (
+        RunTelemetry(
+            available=False,
+            total_spans=0,
+            error_spans=0,
+            last_activity=None,
+            window_days=3,
+            activities=(),
+        ),
+        "off",
+    )
+    return read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        policy=policy,
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=(tuple(prs), None),
+        temporal=(((), tuple(bumps), (), ()), None),
+        telemetry=telemetry,
+    )
+
+
+def _clean_green(number: int, package: str) -> tuple[GithubPr, BumpExecution]:
+    opened = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    merged = datetime(2026, 5, 20, 12, 15, tzinfo=UTC)
+    pr = _pr(
+        number, package, "merged", verdict="clean", opened=opened, merged=merged
+    )
+    bump = BumpExecution(
+        workflow_id=f"froot-bump-mseeks-revisionist-{package}",
+        status="completed",
+        start=opened,
+        close=merged,
+        verdict="clean",
+        ci="passed",
+        pr_number=number,
+        repo=REPO,
+        reason=None,
+    )
+    return pr, bump
+
+
+def test_panel_renders_header_and_unearned_row_with_no_history():
+    # A configured repo with no decisions yet still shows its class, honestly
+    # not-earned, with the blocker spelled out (the shadow gate's dry run).
+    html = render.page(_model())
+    assert "Earned autonomy" in html
+    assert "shadow gate" in html
+    assert "only 0/5 decided recently" in html
+
+
+def test_panel_shows_no_classes_yet_when_no_repos_configured():
+    model = read_model.assemble(
+        now=NOW,
+        repos=(),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=((), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=(
+            RunTelemetry(
+                available=False,
+                total_spans=0,
+                error_spans=0,
+                last_activity=None,
+                window_days=3,
+                activities=(),
+            ),
+            "off",
+        ),
+    )
+    assert "No classes yet" in render.page(model)
+
+
+def test_shadow_badge_holds_open_pr_with_substantive_reason():
+    # No history + default policy: the badge holds the PR and shows the real
+    # blocker (the class has no record yet), not the steward's allowlist switch.
+    prs = [_pr(23, "vitest", "open", verdict="clean", opened=NOW)]
+    html = render.page(_model_p(prs, [], AutonomyPolicy()))
+    assert "held" in html
+    assert "class not earned" in html
+
+
+def test_panel_marks_class_earned_and_shows_reclaim_budget():
+    pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3, 4, 5)]
+    prs = [p for p, _ in pairs]
+    bumps = [b for _, b in pairs]
+    policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
+    html = render.page(_model_p(prs, bumps, policy))
+    assert ">earned<" in html  # the class cleared its gate
+    assert "reclaimable" in html  # the budget framing
+
+
+def test_shadow_badge_would_auto_merge_on_earned_allowlisted_class():
+    pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3)]
+    prs = [p for p, _ in pairs]
+    bumps = [b for _, b in pairs]
+    _, open_bump = _clean_green(9, "axios")
+    # Re-open the 9th: clean verdict + green CI, but still awaiting a human.
+    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
+    bumps.append(open_bump)
+    policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
+    html = render.page(_model_p(prs, bumps, policy))
+    assert "would auto-merge" in html

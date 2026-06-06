@@ -27,6 +27,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from froot.domain.ecosystem import Ecosystem
 from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
+from froot.policy.autonomy import AutonomyPolicy
 from froot.result import Ok
 
 _DEFAULT_SCAN_INTERVAL_SECONDS = 86_400
@@ -281,3 +282,51 @@ class BehaviorSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return True
         return value
+
+
+class AutonomySettings(BaseSettings):
+    """The earned-autonomy thresholds (``FROOT_AUTOMERGE_*``), advisory today.
+
+    These tune the *shadow gate*: the dashboard reads them to decide whether a
+    (repo, loop) class has earned its gate move and whether each open PR would
+    auto-merge under that grant. Nothing acts on the verdict yet — froot stays
+    record-only — so the defaults are deliberately conservative and the
+    allowlist is empty, the revocable switch left off until a steward flips it.
+
+    * ``min_rate`` / ``min_decided`` / ``window_days`` — the track-record bar a
+      class must clear, measured over a recent window (trust is recent, §2.11).
+    * ``allowlist`` (``FROOT_AUTOMERGE_ALLOWLIST``) — a comma-separated list of
+      ``owner/name`` slugs a steward has opted into; ``NoDecode`` so it is a
+      plain list, not JSON. Empty by default: no class can ride the grant.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_AUTOMERGE_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    min_rate: float = Field(default=0.95, ge=0.0, le=1.0)
+    min_decided: int = Field(default=5, ge=1)
+    window_days: int = Field(default=90, gt=0)
+    allowlist: Annotated[tuple[str, ...], NoDecode] = ()
+
+    @field_validator("allowlist", mode="before")
+    @classmethod
+    def _parse_allowlist(cls, value: object) -> object:
+        """Parse the allowlist as a comma-separated ``owner/name`` list."""
+        if not isinstance(value, str):
+            return value
+        return tuple(
+            entry.strip() for entry in value.split(",") if entry.strip()
+        )
+
+    def policy(self) -> AutonomyPolicy:
+        """Build the pure :class:`AutonomyPolicy` the read-model consumes."""
+        return AutonomyPolicy(
+            min_rate=self.min_rate,
+            min_decided=self.min_decided,
+            window_days=self.window_days,
+            allowlisted_repos=frozenset(self.allowlist),
+        )

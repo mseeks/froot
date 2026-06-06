@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from froot.config.settings import (
+    AutonomySettings,
     DashboardSettings,
     ReviewSettings,
     Settings,
@@ -30,6 +31,7 @@ from froot.dashboard import (
     temporal_source,
 )
 from froot.domain.loop import Loop
+from froot.policy.autonomy import AutonomyPolicy
 
 if TYPE_CHECKING:
     from temporalio.client import Client
@@ -61,6 +63,19 @@ def _review_interval() -> int:
         return _DEFAULT_REVIEW_INTERVAL
 
 
+def _autonomy_policy() -> AutonomyPolicy:
+    """The earned-autonomy thresholds, degrading to safe defaults.
+
+    A bad ``FROOT_AUTOMERGE_*`` value must never blank the page: the fallback
+    is the conservative default with an empty allowlist, so the shadow gate
+    simply holds everything rather than erroring.
+    """
+    try:
+        return AutonomySettings().policy()
+    except Exception:  # never let a config read fail the page
+        return AutonomyPolicy()
+
+
 async def build_html(client: Client) -> str:
     """Derive the whole view live and render it (the per-request work)."""
     now = datetime.now(UTC)
@@ -74,6 +89,7 @@ async def build_html(client: Client) -> str:
         now=now,
         repos=repos,
         loops=loops,
+        policy=_autonomy_policy(),
         scan_interval_seconds=interval,
         review_interval_seconds=_review_interval(),
         github=github_result,

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from froot.config.settings import (
+    AutonomySettings,
     BehaviorSettings,
     GitHubSettings,
     ModelSettings,
@@ -163,3 +164,52 @@ def test_telemetry_otel_parsing(
 ):
     monkeypatch.setenv("FROOT_OTEL", value)
     assert TelemetrySettings().otel is expected
+
+
+def _clear_automerge(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in (
+        "FROOT_AUTOMERGE_MIN_RATE",
+        "FROOT_AUTOMERGE_MIN_DECIDED",
+        "FROOT_AUTOMERGE_WINDOW_DAYS",
+        "FROOT_AUTOMERGE_ALLOWLIST",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_autonomy_defaults_are_conservative(monkeypatch: pytest.MonkeyPatch):
+    _clear_automerge(monkeypatch)
+    policy = AutonomySettings().policy()
+    assert policy.min_rate == 0.95
+    assert policy.min_decided == 5
+    assert policy.window_days == 90
+    # The revocable switch is off by default: no repo can ride the grant.
+    assert policy.allowlisted_repos == frozenset()
+
+
+def test_autonomy_reads_env_and_parses_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("FROOT_AUTOMERGE_MIN_RATE", "0.9")
+    monkeypatch.setenv("FROOT_AUTOMERGE_MIN_DECIDED", "10")
+    monkeypatch.setenv("FROOT_AUTOMERGE_WINDOW_DAYS", "30")
+    monkeypatch.setenv(
+        "FROOT_AUTOMERGE_ALLOWLIST", "acme/widgets, acme/gadgets"
+    )
+    policy = AutonomySettings().policy()
+    assert policy.min_rate == 0.9
+    assert policy.min_decided == 10
+    assert policy.window_days == 30
+    assert policy.allowlisted_repos == frozenset(
+        {"acme/widgets", "acme/gadgets"}
+    )
+
+
+def test_autonomy_allowlist_blank_is_empty(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_AUTOMERGE_ALLOWLIST", "  ")
+    assert AutonomySettings().policy().allowlisted_repos == frozenset()
+
+
+def test_autonomy_rejects_rate_above_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_AUTOMERGE_MIN_RATE", "1.5")
+    with pytest.raises(ValidationError):
+        AutonomySettings()
