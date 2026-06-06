@@ -29,6 +29,7 @@ from froot.dashboard import (
     render,
     temporal_source,
 )
+from froot.domain.loop import Loop
 
 if TYPE_CHECKING:
     from temporalio.client import Client
@@ -42,14 +43,14 @@ _DEFAULT_INTERVAL: Final = 86_400
 _DEFAULT_REVIEW_INTERVAL: Final = 300
 
 
-def _config() -> tuple[tuple[str, ...], int]:
-    """The watched repos + scan interval, degrading to empty if unset."""
+def _config() -> tuple[tuple[str, ...], tuple[Loop, ...], int]:
+    """The watched repos, active loops, and scan interval (empty if unset)."""
     try:
         settings = Settings()
     except Exception:  # FROOT_REPOS unset/invalid — show an empty heartbeat
-        return (), _DEFAULT_INTERVAL
+        return (), (Loop.DEPENDENCY_PATCH,), _DEFAULT_INTERVAL
     repos = tuple(target.repo.slug for target in settings.repos)
-    return repos, settings.scan_interval_seconds
+    return repos, settings.loops, settings.scan_interval_seconds
 
 
 def _review_interval() -> int:
@@ -63,7 +64,7 @@ def _review_interval() -> int:
 async def build_html(client: Client) -> str:
     """Derive the whole view live and render it (the per-request work)."""
     now = datetime.now(UTC)
-    repos, interval = _config()
+    repos, loops, interval = _config()
     github_result, temporal_result, telemetry_result = await asyncio.gather(
         github_source.fetch(repos),
         temporal_source.fetch(client),
@@ -72,6 +73,7 @@ async def build_html(client: Client) -> str:
     model = read_model.assemble(
         now=now,
         repos=repos,
+        loops=loops,
         scan_interval_seconds=interval,
         review_interval_seconds=_review_interval(),
         github=github_result,

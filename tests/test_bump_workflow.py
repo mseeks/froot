@@ -15,7 +15,6 @@ from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from froot.domain.candidate import PatchCandidate
 from froot.domain.changelog import ChangelogVerdict, CleanVerdict
 from froot.domain.ci import (
     CIFailed,
@@ -32,6 +31,7 @@ from froot.workflow.types import (
     BumpParams,
     CiCheckInput,
     CloseInput,
+    JudgeInput,
     OpenPrInput,
     RecordInput,
 )
@@ -45,7 +45,7 @@ _closed: list[int] = []
 
 
 @activity.defn(name="judge_changelog")
-async def _mock_judge(candidate: PatchCandidate) -> ChangelogVerdict:
+async def _mock_judge(params: JudgeInput) -> ChangelogVerdict:
     return CleanVerdict(rationale="patch only")
 
 

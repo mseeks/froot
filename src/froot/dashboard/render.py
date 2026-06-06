@@ -207,7 +207,8 @@ def _heartbeat(model: DashboardModel) -> str:
             tail = f' <span class="mut">&middot; {escape(loop.status)}</span>'
         return (
             f'<div class="row">{_dot(dot)}'
-            f'<span class="mono">{escape(loop.repo)}</span>{tail}</div>'
+            f'<span class="mono">{escape(loop.repo)}</span>'
+            f' <span class="mut">{escape(loop.loop)}</span>{tail}</div>'
         )
 
     if not model.scan_loops:

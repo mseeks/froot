@@ -14,19 +14,25 @@ from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from froot.domain.candidate import PatchCandidate
-from froot.domain.repo import TargetRepo
+from froot.domain.candidate import Candidate
 from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.scan_workflow import ScanWorkflow
-from froot.workflow.types import DispatchInput, ScanParams, ScanResult
+from froot.workflow.types import (
+    DispatchInput,
+    ReconcileInput,
+    ScanCandidatesInput,
+    ScanParams,
+    ScanResult,
+)
 from tests.support import make_candidate, make_repo
 
 _TASK_QUEUE = "froot-test-scan"
 _dispatched: list[str] = []
+_dispatched_loops: list[str] = []
 
 
 @activity.defn(name="scan_candidates")
-async def _mock_scan(target: object) -> tuple[PatchCandidate, ...]:
+async def _mock_scan(params: ScanCandidatesInput) -> tuple[Candidate, ...]:
     return (
         make_candidate(package="alpha", current="1.0.0", target="1.0.1"),
         make_candidate(package="beta", current="2.0.0", target="2.0.1"),
@@ -36,10 +42,11 @@ async def _mock_scan(target: object) -> tuple[PatchCandidate, ...]:
 @activity.defn(name="dispatch_bump")
 async def _mock_dispatch(params: DispatchInput) -> None:
     _dispatched.append(params.candidate.package)
+    _dispatched_loops.append(params.loop.value)
 
 
 @activity.defn(name="reconcile_open_prs")
-async def _mock_reconcile(target: TargetRepo) -> int:
+async def _mock_reconcile(params: ReconcileInput) -> int:
     return 1
 
 
@@ -76,6 +83,34 @@ async def test_scan_dispatches_each_candidate():
     assert result.dispatched == 2
     assert result.reconciled == 1  # the reconcile sweep ran after dispatch
     assert sorted(_dispatched) == ["alpha", "beta"]
+
+
+async def test_scan_threads_the_loop_to_dispatch():
+    # A security-patch scan threads its loop through to every dispatched bump,
+    # so the bump runs in the right branch/label/judge namespace.
+    from froot.domain.loop import Loop
+
+    _dispatched.clear()
+    _dispatched_loops.clear()
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        client = await _pydantic_client(env)
+        async with Worker(
+            client,
+            task_queue=_TASK_QUEUE,
+            workflows=[ScanWorkflow],
+            activities=_MOCKS,
+        ):
+            await client.execute_workflow(
+                ScanWorkflow.run,
+                ScanParams(
+                    target=make_repo(),
+                    continuous=False,
+                    loop=Loop.SECURITY_PATCH,
+                ),
+                id="scan-security",
+                task_queue=_TASK_QUEUE,
+            )
+    assert _dispatched_loops == ["security-patch", "security-patch"]
 
 
 async def test_continuous_loop_keeps_running_and_redispatches():

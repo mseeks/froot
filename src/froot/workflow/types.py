@@ -10,9 +10,10 @@ from __future__ import annotations
 from pydantic import Field
 
 from froot.domain.base import Frozen
-from froot.domain.candidate import PatchCandidate
+from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.determinism import FrontierItem, ReviewFinding
+from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.repo import TargetRepo
@@ -25,11 +26,31 @@ _DEFAULT_REVIEW_INTERVAL_SECONDS = 300
 
 
 class ScanParams(Frozen):
-    """Input to the self-scheduling scan loop."""
+    """Input to the self-scheduling scan loop.
+
+    ``loop`` selects which maintenance loop this scan runs (its signal, its
+    candidate policy, and the branch/label/id namespace); it defaults to
+    dependency-patch so existing starts are unchanged.
+    """
 
     target: TargetRepo
     interval_seconds: int = Field(default=_DEFAULT_INTERVAL_SECONDS, gt=0)
     continuous: bool = False
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class ScanCandidatesInput(Frozen):
+    """Input to the scan-candidates activity (which loop's signal to run)."""
+
+    target: TargetRepo
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class ReconcileInput(Frozen):
+    """Input to the reconcile activity (which loop's stale PRs to close)."""
+
+    target: TargetRepo
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class ScanResult(Frozen):
@@ -62,16 +83,25 @@ class BumpParams(Frozen):
     """
 
     target: TargetRepo
-    candidate: PatchCandidate
+    candidate: Candidate
     close_on_red: bool = True
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class JudgeInput(Frozen):
+    """Input to the changelog-judge activity (candidate + which loop asks)."""
+
+    candidate: Candidate
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class OpenPrInput(Frozen):
     """Input to the open-pull-request activity."""
 
     target: TargetRepo
-    candidate: PatchCandidate
+    candidate: Candidate
     verdict: ChangelogVerdict
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class CiCheckInput(Frozen):
@@ -86,6 +116,7 @@ class RecordInput(Frozen):
 
     target: TargetRepo
     outcome: LoopOutcome
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class CloseInput(Frozen):
@@ -95,18 +126,21 @@ class CloseInput(Frozen):
         target: The repo the PR lives on.
         pr: The PR to close (its branch is deleted with it).
         failing: The names of the checks that failed, for the close comment.
+        loop: Which loop owns the PR (for the structured close log).
     """
 
     target: TargetRepo
     pr: PullRequestRef
     failing: tuple[str, ...] = ()
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class DispatchInput(Frozen):
     """Input to the dispatch-bump activity (start a bump loop)."""
 
     target: TargetRepo
-    candidate: PatchCandidate
+    candidate: Candidate
+    loop: Loop = Loop.DEPENDENCY_PATCH
 
 
 class ReviewScanParams(Frozen):

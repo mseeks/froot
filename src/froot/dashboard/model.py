@@ -34,6 +34,8 @@ class ScanLoop(Frozen):
 
     Attributes:
         repo: The ``owner/name`` slug this loop watches.
+        loop: Which maintenance loop this row is for (``dependency-patch`` /
+            ``security-patch``), so the two loops' scans show distinctly.
         status: The current scan workflow status (``running`` /
             ``continued_as_new`` / ``terminated`` / ``none`` / ...), lowercased.
         live: True when the loop is actively self-scheduling (running / CAN).
@@ -42,6 +44,7 @@ class ScanLoop(Frozen):
     """
 
     repo: str
+    loop: str = "dependency-patch"
     status: str
     live: bool
     last_tick: datetime | None

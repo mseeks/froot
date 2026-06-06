@@ -1,13 +1,33 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from froot.adapters.npm import (
+    NpmPackageManager,
     parse_direct_dependencies,
     parse_locked_versions,
     parse_versions,
 )
-from tests.support import ver
+from tests.support import make_repo, ver
+
+
+async def test_list_installed_reads_direct_deps_and_locked_versions(
+    tmp_path: Path,
+):
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"left-pad": "^1.4.2"}, '
+        '"devDependencies": {"jest": "^29.0.0"}}'
+    )
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages": {"node_modules/left-pad": {"version": "1.4.2"}, '
+        '"node_modules/jest": {"version": "29.0.0"}}}'
+    )
+    installed = await NpmPackageManager().list_installed(make_repo(), tmp_path)
+    assert {p.package: str(p.version) for p in installed} == {
+        "jest": "29.0.0",
+        "left-pad": "1.4.2",
+    }
 
 
 def test_parse_direct_dependencies_deps_and_devdeps():

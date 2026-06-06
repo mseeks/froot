@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from froot.domain.candidate import AvailableUpgrade, PatchCandidate
+from froot.domain.advisory import Advisory, VulnRange
+from froot.domain.candidate import (
+    AvailableUpgrade,
+    Candidate,
+    InstalledPackage,
+)
 from froot.domain.changelog import (
     Changelog,
     ChangelogVerdict,
@@ -17,6 +22,7 @@ from froot.domain.changelog import (
 )
 from froot.domain.ci import CIPassed, CIStatus
 from froot.domain.ecosystem import Ecosystem
+from froot.domain.loop import Loop
 from froot.domain.pull_request import (
     BranchName,
     PullRequestDraft,
@@ -39,8 +45,8 @@ def make_candidate(
     current: str = "1.4.2",
     target: str = "1.4.3",
     ecosystem: Ecosystem = Ecosystem.NPM,
-) -> PatchCandidate:
-    return PatchCandidate(
+) -> Candidate:
+    return Candidate(
         package=package,
         ecosystem=ecosystem,
         current=ver(current),
@@ -59,6 +65,32 @@ def make_upgrade(
         ecosystem=ecosystem,
         current=ver(current),
         available=tuple(ver(v) for v in available),
+    )
+
+
+def make_installed(
+    package: str = "left-pad",
+    version: str = "1.4.2",
+    ecosystem: Ecosystem = Ecosystem.NPM,
+) -> InstalledPackage:
+    return InstalledPackage(
+        package=package, ecosystem=ecosystem, version=ver(version)
+    )
+
+
+def make_advisory(
+    package: str = "left-pad",
+    advisory_id: str = "GHSA-test",
+    ranges: tuple[tuple[str, str | None], ...] = (("0", "1.4.3"),),
+    aliases: tuple[str, ...] = (),
+    ecosystem: Ecosystem = Ecosystem.NPM,
+) -> Advisory:
+    return Advisory(
+        id=advisory_id,
+        aliases=aliases,
+        package=package,
+        ecosystem=ecosystem,
+        ranges=tuple(VulnRange(introduced=i, fixed=f) for i, f in ranges),
     )
 
 
@@ -179,19 +211,41 @@ class FakeForge:
 class FakePackageManager:
     """In-memory :class:`~froot.ports.protocols.PackageManager`."""
 
-    def __init__(self, upgrades: tuple[AvailableUpgrade, ...] = ()) -> None:
+    def __init__(
+        self,
+        upgrades: tuple[AvailableUpgrade, ...] = (),
+        installed: tuple[InstalledPackage, ...] = (),
+    ) -> None:
         self.upgrades = upgrades
-        self.applied: PatchCandidate | None = None
+        self.installed = installed
+        self.applied: Candidate | None = None
 
     async def list_upgrades(
         self, target: TargetRepo, workspace: Path
     ) -> tuple[AvailableUpgrade, ...]:
         return self.upgrades
 
+    async def list_installed(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[InstalledPackage, ...]:
+        return self.installed
+
     async def apply_patch_bump(
-        self, candidate: PatchCandidate, workspace: Path
+        self, candidate: Candidate, workspace: Path
     ) -> None:
         self.applied = candidate
+
+
+class FakeAdvisorySource:
+    """In-memory :class:`~froot.ports.protocols.AdvisorySource`."""
+
+    def __init__(self, advisories: tuple[Advisory, ...] = ()) -> None:
+        self.advisories_for = advisories
+
+    async def advisories(
+        self, installed: tuple[InstalledPackage, ...]
+    ) -> tuple[Advisory, ...]:
+        return self.advisories_for
 
 
 class FakeChangelogSource:
@@ -200,7 +254,7 @@ class FakeChangelogSource:
     def __init__(self, changelog: Changelog | None = None) -> None:
         self.changelog = changelog
 
-    async def fetch(self, candidate: PatchCandidate) -> Changelog | None:
+    async def fetch(self, candidate: Candidate) -> Changelog | None:
         return self.changelog
 
 
@@ -209,6 +263,10 @@ class FakeJudge:
 
     def __init__(self, verdict: ChangelogVerdict | None = None) -> None:
         self.verdict: ChangelogVerdict = verdict or CleanVerdict(rationale="ok")
+        self.loops: list[Loop] = []
 
-    async def judge(self, changelog: Changelog) -> ChangelogVerdict:
+    async def judge(
+        self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
+    ) -> ChangelogVerdict:
+        self.loops.append(loop)
         return self.verdict

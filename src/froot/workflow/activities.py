@@ -14,17 +14,18 @@ import json
 import logging
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, assert_never
 
 from temporalio import activity
 
-from froot.domain.candidate import PatchCandidate
+from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict, UnknownVerdict
 from froot.domain.ci import CIStatus
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
+from froot.domain.loop import Loop
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.repo import TargetRepo
-from froot.policy.candidates import select_patch_candidates
-from froot.policy.compose import PR_LABELS, pull_request_draft
+from froot.policy.compose import pr_labels, pull_request_draft
 from froot.policy.determinism import analyze_workflow_surface
 from froot.policy.naming import (
     branch_name,
@@ -38,11 +39,17 @@ from froot.workflow.types import (
     CloseInput,
     DispatchInput,
     DispatchReviewInput,
+    JudgeInput,
     OpenPrInput,
     PostReviewInput,
     PrReviewParams,
+    ReconcileInput,
     RecordInput,
+    ScanCandidatesInput,
 )
+
+if TYPE_CHECKING:
+    from froot.ports.protocols import PackageManager
 
 _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
@@ -54,27 +61,69 @@ def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
     return workspace / target.manifest_dir if target.manifest_dir else workspace
 
 
+async def _select_candidates(
+    loop: Loop,
+    target: TargetRepo,
+    package_manager: PackageManager,
+    manifest_dir: Path,
+) -> tuple[Candidate, ...]:
+    """Gather this loop's signal from the checkout and select its candidates.
+
+    The one genuinely per-loop seam: dependency-patch reads the available
+    upgrades and picks the highest patch; security-patch reads the installed,
+    asks OSV for advisories, and picks the lowest version clearing each. The
+    impure sources are lazy-imported per arm so neither drags the other's stack
+    into a sandbox. Both feed a pure selection policy.
+    """
+    match loop:
+        case Loop.DEPENDENCY_PATCH:
+            from froot.policy.candidates import select_patch_candidates
+
+            upgrades = await package_manager.list_upgrades(target, manifest_dir)
+            return select_patch_candidates(upgrades)
+        case Loop.SECURITY_PATCH:
+            return await _select_security_candidates(
+                target, package_manager, manifest_dir
+            )
+    assert_never(loop)
+
+
+async def _select_security_candidates(
+    target: TargetRepo, package_manager: PackageManager, manifest_dir: Path
+) -> tuple[Candidate, ...]:
+    """Security signal: installed set, OSV advisories, clearing targets."""
+    from froot.adapters.osv import OsvAdvisorySource
+    from froot.policy.candidates import select_security_candidates
+
+    installed = await package_manager.list_installed(target, manifest_dir)
+    advisories = await OsvAdvisorySource().advisories(installed)
+    return select_security_candidates(installed, advisories)
+
+
 @activity.defn
 async def scan_candidates(
-    target: TargetRepo,
-) -> tuple[PatchCandidate, ...]:
-    """Check out the repo, read available upgrades, select patch candidates."""
+    params: ScanCandidatesInput,
+) -> tuple[Candidate, ...]:
+    """Check out the repo and select this loop's candidates."""
     from froot.adapters.github import GitHubForge
     from froot.adapters.registry import package_manager_for
 
     forge = GitHubForge()
-    package_manager = package_manager_for(target.ecosystem)
+    package_manager = package_manager_for(params.target.ecosystem)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
-        await forge.checkout(target, workspace)
-        upgrades = await package_manager.list_upgrades(
-            target, _manifest_dir(target, workspace)
+        await forge.checkout(params.target, workspace)
+        candidates = await _select_candidates(
+            params.loop,
+            params.target,
+            package_manager,
+            _manifest_dir(params.target, workspace),
         )
-    return select_patch_candidates(upgrades)
+    return candidates
 
 
 @activity.defn
-async def judge_changelog(candidate: PatchCandidate) -> ChangelogVerdict:
+async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     """Fetch the candidate's changelog and get the model's typed verdict.
 
     The model is froot's one thin, non-load-bearing judgment: a clean verdict
@@ -83,20 +132,21 @@ async def judge_changelog(candidate: PatchCandidate) -> ChangelogVerdict:
     ``UnknownVerdict`` — the bump proceeds, the human still gets the PR, and the
     dashboard records the verdict as unknown — rather than failing (and then
     retrying) the activity. Only the model call is guarded; the fetch is already
-    best-effort (returns ``None``, not an exception).
+    best-effort (returns ``None``, not an exception). The loop selects what the
+    model is asked (clean-patch vs breaking-change-on-a-security-bump).
     """
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
-    changelog = await HttpChangelogSource().fetch(candidate)
+    changelog = await HttpChangelogSource().fetch(params.candidate)
     if changelog is None:
         return UnknownVerdict(rationale="No changelog could be fetched.")
     try:
-        return await PydanticAiJudge().judge(changelog)
+        return await PydanticAiJudge().judge(changelog, params.loop)
     except Exception as exc:
         activity.logger.warning(
             "changelog judge unavailable for %s; degrading to unknown: %r",
-            candidate.package,
+            params.candidate.package,
             exc,
         )
         return UnknownVerdict(
@@ -112,11 +162,13 @@ async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
 
     forge = GitHubForge()
     package_manager = package_manager_for(params.target.ecosystem)
-    branch = branch_name(params.candidate)
+    branch = branch_name(params.candidate, params.loop)
     existing = await forge.find_open_pull_request(params.target, branch)
     if existing is not None:
         return existing
-    draft = pull_request_draft(params.target, params.candidate, params.verdict)
+    draft = pull_request_draft(
+        params.target, params.candidate, params.verdict, params.loop
+    )
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(params.target, workspace)
@@ -141,12 +193,14 @@ async def record_outcome(params: RecordInput) -> None:
     from froot.adapters.github import GitHubForge
 
     outcome = params.outcome
-    await GitHubForge().add_labels(params.target, outcome.pr.number, PR_LABELS)
+    await GitHubForge().add_labels(
+        params.target, outcome.pr.number, pr_labels(params.loop)
+    )
     _log.info(
         json.dumps(
             {
                 "event": "loop_outcome",
-                "loop": "dependency-patch",
+                "loop": params.loop.value,
                 "repo": params.target.repo.slug,
                 "package": outcome.candidate.package,
                 "from": str(outcome.candidate.current),
@@ -185,8 +239,9 @@ async def dispatch_bump(params: DispatchInput) -> None:
                 target=params.target,
                 candidate=params.candidate,
                 close_on_red=BehaviorSettings().close_on_red,
+                loop=params.loop,
             ),
-            id=bump_workflow_id(params.target, params.candidate),
+            id=bump_workflow_id(params.target, params.candidate, params.loop),
             task_queue=task_queue(),
             id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
@@ -220,7 +275,7 @@ async def close_pull_request(params: CloseInput) -> None:
         json.dumps(
             {
                 "event": "pr_closed",
-                "loop": "dependency-patch",
+                "loop": params.loop.value,
                 "reason": "ci_red",
                 "repo": params.target.repo.slug,
                 "pr": params.pr.number,
@@ -232,14 +287,15 @@ async def close_pull_request(params: CloseInput) -> None:
 
 
 @activity.defn
-async def reconcile_open_prs(target: TargetRepo) -> int:
-    """Close froot PRs a newer patch superseded or the base already satisfied.
+async def reconcile_open_prs(params: ReconcileInput) -> int:
+    """Close this loop's PRs that a newer candidate or the base has overtaken.
 
-    Self-contained: lists the repo's open PRs, re-derives the live upgrade facts
-    (a fresh checkout + the package manager's read — derive, never store), asks
-    the pure :func:`~froot.policy.reconcile.reconciliations` policy which to
-    close, and closes each (deleting its branch). A no-op when reconcile is off
-    (``FROOT_RECONCILE``). Returns the number closed.
+    Self-contained: lists the repo's open PRs, re-derives this loop's live
+    candidates (a fresh checkout + the loop's signal, derive-never-store), asks
+    the pure :func:`~froot.policy.reconcile.reconciliations` policy: which of
+    loop's PRs to close, and closes each (deleting its branch). Scoped to the
+    loop's own branch namespace, so the two loops never reconcile each other's
+    PRs. A no-op when reconcile is off (``FROOT_RECONCILE``). Returns the count.
     """
     from froot.adapters.github import GitHubForge
     from froot.adapters.registry import package_manager_for
@@ -250,16 +306,17 @@ async def reconcile_open_prs(target: TargetRepo) -> int:
     if not BehaviorSettings().reconcile:
         return 0
 
+    target, loop = params.target, params.loop
     forge = GitHubForge()
     package_manager = package_manager_for(target.ecosystem)
     open_prs = await forge.list_open_pull_requests(target)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(target, workspace)
-        upgrades = await package_manager.list_upgrades(
-            target, _manifest_dir(target, workspace)
+        candidates = await _select_candidates(
+            loop, target, package_manager, _manifest_dir(target, workspace)
         )
-    closures = reconciliations(open_prs, upgrades)
+    closures = reconciliations(open_prs, candidates, loop)
     for closure in closures:
         await forge.upsert_issue_comment(
             target, closure.pr.number, CLOSE_MARKER, closure.comment
@@ -272,7 +329,7 @@ async def reconcile_open_prs(target: TargetRepo) -> int:
             json.dumps(
                 {
                     "event": "reconcile",
-                    "loop": "dependency-patch",
+                    "loop": loop.value,
                     "repo": target.repo.slug,
                     "closed": len(closures),
                     "prs": [closure.pr.number for closure in closures],

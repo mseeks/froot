@@ -27,6 +27,7 @@ from froot.dashboard.model import (
     TrackRecord,
     Verification,
 )
+from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.policy.naming import review_workflow_id, scan_workflow_id
 from froot.result import Ok
@@ -59,42 +60,52 @@ def _median(values: list[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2
 
 
-def _scan_id(repo: str) -> str | None:
-    """The deterministic scan-loop id for an ``owner/name`` slug, if valid."""
+def _scan_id(repo: str, loop: Loop) -> str | None:
+    """The deterministic scan-loop id for an ``owner/name`` slug + loop."""
     match RepoRef.parse(repo):
         case Ok(ref):
-            return scan_workflow_id(TargetRepo(repo=ref))
+            return scan_workflow_id(TargetRepo(repo=ref), loop)
         case _:
             return None
 
 
 def _scan_loops(
-    repos: tuple[str, ...], scans: tuple[ScanExecution, ...]
+    repos: tuple[str, ...],
+    loops: tuple[Loop, ...],
+    scans: tuple[ScanExecution, ...],
 ) -> tuple[ScanLoop, ...]:
-    """One liveness row per configured repo (latest execution wins)."""
+    """One liveness row per configured (repo, loop) (latest execution wins)."""
     by_id: dict[str, ScanExecution] = {}
     for scan in scans:
         current = by_id.get(scan.workflow_id)
         if current is None or _newer(scan.start, current.start):
             by_id[scan.workflow_id] = scan
-    loops: list[ScanLoop] = []
-    for repo in repos:
-        scan_id = _scan_id(repo)
-        execution = by_id.get(scan_id) if scan_id is not None else None
-        if execution is None:
-            loops.append(
-                ScanLoop(repo=repo, status="none", live=False, last_tick=None)
-            )
-        else:
-            loops.append(
-                ScanLoop(
-                    repo=repo,
-                    status=execution.status,
-                    live=execution.status in _LIVE_STATUSES,
-                    last_tick=execution.start,
+    rows: list[ScanLoop] = []
+    for loop in loops:
+        for repo in repos:
+            scan_id = _scan_id(repo, loop)
+            execution = by_id.get(scan_id) if scan_id is not None else None
+            if execution is None:
+                rows.append(
+                    ScanLoop(
+                        repo=repo,
+                        loop=loop.value,
+                        status="none",
+                        live=False,
+                        last_tick=None,
+                    )
                 )
-            )
-    return tuple(loops)
+            else:
+                rows.append(
+                    ScanLoop(
+                        repo=repo,
+                        loop=loop.value,
+                        status=execution.status,
+                        live=execution.status in _LIVE_STATUSES,
+                        last_tick=execution.start,
+                    )
+                )
+    return tuple(rows)
 
 
 def _newer(a: datetime | None, b: datetime | None) -> bool:
@@ -404,6 +415,7 @@ def assemble(
     *,
     now: datetime,
     repos: tuple[str, ...],
+    loops: tuple[Loop, ...] = (Loop.DEPENDENCY_PATCH,),
     scan_interval_seconds: int,
     review_interval_seconds: int,
     github: tuple[tuple[GithubPr, ...], str | None],
@@ -438,7 +450,7 @@ def assemble(
             run_telemetry,
             clickhouse_error,
         ),
-        scan_loops=_scan_loops(repos, scans),
+        scan_loops=_scan_loops(repos, loops, scans),
         track_record=_track_record(rows),
         verification=_verification(rows),
         judgment=_judgment(rows),

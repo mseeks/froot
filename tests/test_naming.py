@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from froot.domain.loop import Loop
 from froot.policy.naming import (
     branch_name,
     branch_package_prefix,
@@ -7,6 +8,29 @@ from froot.policy.naming import (
     scan_workflow_id,
 )
 from tests.support import make_candidate, make_repo
+
+
+def test_security_loop_namespaces_branches_and_ids():
+    repo = make_repo("acme/widgets")
+    candidate = make_candidate(
+        package="left-pad", current="1.2.0", target="1.3.0"
+    )
+    # Branches carry the loop, so the two loops never collide on one branch.
+    assert branch_name(candidate, Loop.SECURITY_PATCH).value == (
+        "froot/security-patch/left-pad-1.3.0"
+    )
+    assert branch_package_prefix("left-pad", Loop.SECURITY_PATCH) == (
+        "froot/security-patch/left-pad-"
+    )
+    # Workflow ids namespace non-default loops; dependency-patch stays as-is.
+    assert bump_workflow_id(repo, candidate, Loop.SECURITY_PATCH) == (
+        "froot-bump-security-patch-acme-widgets-left-pad-1.3.0"
+    )
+    assert scan_workflow_id(repo, Loop.SECURITY_PATCH) == (
+        "froot-scan-security-patch-acme-widgets"
+    )
+    # The dependency-patch ids are byte-for-byte what they were before loops.
+    assert scan_workflow_id(repo) == "froot-scan-acme-widgets"
 
 
 def test_branch_name_format():

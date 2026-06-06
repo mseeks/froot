@@ -23,8 +23,10 @@ import froot.adapters.changelog_http as changelog_mod
 import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
 import froot.adapters.registry as registry_mod
+from froot.domain.candidate import Candidate
 from froot.domain.changelog import Changelog, CleanVerdict
 from froot.domain.ci import CIFailed, CIPassed, CIPending
+from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
 from froot.workflow import activities
 from froot.workflow.bump_workflow import BumpWorkflow
@@ -80,7 +82,12 @@ async def _pydantic_client(env: WorkflowEnvironment) -> Client:
     return Client(**config)
 
 
-async def _run(*, close_on_red: bool = True) -> LoopOutcome:
+async def _run(
+    *,
+    close_on_red: bool = True,
+    loop: Loop = Loop.DEPENDENCY_PATCH,
+    candidate: Candidate | None = None,
+) -> LoopOutcome:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
         async with Worker(
@@ -93,8 +100,9 @@ async def _run(*, close_on_red: bool = True) -> LoopOutcome:
                 BumpWorkflow.run,
                 BumpParams(
                     target=make_repo(),
-                    candidate=make_candidate(),
+                    candidate=candidate or make_candidate(),
                     close_on_red=close_on_red,
+                    loop=loop,
                 ),
                 id="bump-e2e",
                 task_queue=_TASK_QUEUE,
@@ -111,6 +119,28 @@ async def test_green_bump_records_and_stays_open(
     assert outcome.ci_passed
     # The PR is recorded (labeled) and left open for the human — never closed.
     assert set(fake.labeled or ()) == {"froot", "dependency-patch"}
+    assert fake.closed == []
+
+
+async def test_green_security_bump_records_with_security_labels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The whole chassis is loop-agnostic: a security bump (a minor, here) runs
+    # the same real activities to record; only the namespace differs.
+    fake = FakeForge(
+        opened_pr=make_pr(
+            number=9, branch="froot/security-patch/left-pad-1.5.0"
+        ),
+        ci=CIPassed(),
+    )
+    _wire_fakes(monkeypatch, fake)
+    # A security bump is often a minor — the generalized Candidate allows it.
+    candidate = make_candidate(
+        package="left-pad", current="1.4.2", target="1.5.0"
+    )
+    outcome = await _run(loop=Loop.SECURITY_PATCH, candidate=candidate)
+    assert outcome.ci_passed
+    assert set(fake.labeled or ()) == {"froot", "security-patch"}
     assert fake.closed == []
 
 
