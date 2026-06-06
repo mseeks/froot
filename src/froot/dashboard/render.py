@@ -278,6 +278,18 @@ def _budget_cell(g: ClassGate) -> str:
     )
 
 
+def _defect_cell(g: ClassGate) -> str:
+    """The post-merge defect bearing: rate over confirmed-held outcomes."""
+    if g.determined == 0:
+        return '<span class="mut">— (0 confirmed)</span>'
+    rate = g.defect_rate if g.defect_rate is not None else 0.0
+    cls = "ok" if g.defects == 0 else "bad"
+    return (
+        f'<span class="{cls}">{rate * 100:.0f}%</span>'
+        f' <span class="mut">({g.defects}/{g.determined})</span>'
+    )
+
+
 def _class_gates(model: DashboardModel) -> str:
     """The earned-autonomy panel — the shadow gate's per-class standing.
 
@@ -297,6 +309,7 @@ def _class_gates(model: DashboardModel) -> str:
             f'<td class="mut">{escape(g.loop)}</td>'
             f"<td>{g.decided} in {g.window_days}d</td>"
             f"<td>{_rate_cell(g.merge_rate)}</td>"
+            f"<td>{_defect_cell(g)}</td>"
             f"<td>{_earned_cell(g)}</td>"
             f"<td>{_budget_cell(g)}</td>"
             "</tr>"
@@ -304,22 +317,23 @@ def _class_gates(model: DashboardModel) -> str:
         )
         body = (
             "<table><thead><tr><th>repo</th><th>loop</th><th>decided</th>"
-            "<th>rate</th><th>gate</th><th>budget / week</th></tr></thead>"
+            "<th>rate</th><th>defect</th><th>gate</th><th>budget / week</th>"
+            "</tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
     note = (
         '<p class="note">Each <b>class</b> is one loop on one repo &mdash; a '
         "distinct trust unit (a security patch is not a version bump, and they "
-        "never share a record). A class earns its gate from a high enough "
-        "<b>approval rate</b> over enough recently-<b>decided</b> PRs; the "
-        "window keeps trust recent, not lifetime. <b>Budget</b> reads the "
-        "gate in steward-time &mdash; approvals/week is what the class costs "
-        "a human now, reclaimable is the clean-and-green slice a gate move "
-        "would hand back. <b>Advisory only</b>: auto-merge is allowlist-gated "
-        "and off, and the approval rate counts a human <i>merge</i>, not a "
-        "confirmed-good outcome &mdash; with no revert tracking yet, a high "
-        "rate can still mask rubber-stamping (&sect;3.7). Rollback tracking "
-        "and sampled review come before anything acts.</p>"
+        "never share a record). A class earns its gate by <b>triangulation</b> "
+        "(&sect;3.8): a high enough <b>approval rate</b> over enough "
+        "recently-<b>decided</b> PRs <i>and</i> a low <b>defect rate</b> over "
+        "enough confirmed-held merges &mdash; two bearings that fail "
+        "differently (the rate to rubber-stamping, the defect rate to a weak "
+        "oracle), so they can&rsquo;t both lie at once. The window keeps trust "
+        "recent. <b>Budget</b> reads the gate in steward-time: approvals/week "
+        "the class costs now &rarr; the reclaimable slice a move hands back. "
+        "<b>Advisory only</b>: auto-merge is allowlist-gated and off; sampled "
+        "review and adversarial probing are the next legs.</p>"
     )
     return (
         "<section><h2>Earned autonomy &middot; the shadow gate</h2>"

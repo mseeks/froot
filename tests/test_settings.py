@@ -182,6 +182,9 @@ def test_autonomy_defaults_are_conservative(monkeypatch: pytest.MonkeyPatch):
     assert policy.min_rate == 0.95
     assert policy.min_decided == 5
     assert policy.window_days == 90
+    # The post-merge defect bearing: needs evidence, zero-tolerance by default.
+    assert policy.min_determined == 3
+    assert policy.max_defect_rate == 0.0
     # The revocable switch is off by default: no repo can ride the grant.
     assert policy.allowlisted_repos == frozenset()
 

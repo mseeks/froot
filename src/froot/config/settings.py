@@ -310,6 +310,11 @@ class AutonomySettings(BaseSettings):
     min_rate: float = Field(default=0.95, ge=0.0, le=1.0)
     min_decided: int = Field(default=5, ge=1)
     window_days: int = Field(default=90, gt=0)
+    # The post-merge defect bearing (the second, independent leg, §3.8):
+    # how many confirmed-held outcomes are needed before it counts, and the
+    # ceiling on the defect rate (zero-tolerance by default).
+    min_determined: int = Field(default=3, ge=1)
+    max_defect_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     allowlist: Annotated[tuple[str, ...], NoDecode] = ()
 
     @field_validator("allowlist", mode="before")
@@ -328,5 +333,7 @@ class AutonomySettings(BaseSettings):
             min_rate=self.min_rate,
             min_decided=self.min_decided,
             window_days=self.window_days,
+            min_determined=self.min_determined,
+            max_defect_rate=self.max_defect_rate,
             allowlisted_repos=frozenset(self.allowlist),
         )

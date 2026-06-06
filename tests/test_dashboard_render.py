@@ -249,6 +249,7 @@ def _model_p(
     prs: Sequence[GithubPr],
     bumps: Sequence[BumpExecution],
     policy: AutonomyPolicy,
+    outcomes: dict[tuple[str, int], str] | None = None,
 ) -> DashboardModel:
     telemetry = (
         RunTelemetry(
@@ -270,6 +271,7 @@ def _model_p(
         github=(tuple(prs), None),
         temporal=(((), tuple(bumps), (), ()), None),
         telemetry=telemetry,
+        outcomes=outcomes,
     )
 
 
@@ -339,7 +341,8 @@ def test_panel_marks_class_earned_and_shows_reclaim_budget():
     prs = [p for p, _ in pairs]
     bumps = [b for _, b in pairs]
     policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
-    html = render.page(_model_p(prs, bumps, policy))
+    held = {(REPO, n): "held" for n in (1, 2, 3, 4, 5)}  # defect bearing clean
+    html = render.page(_model_p(prs, bumps, policy, outcomes=held))
     assert ">earned<" in html  # the class cleared its gate
     assert "reclaimable" in html  # the budget framing
 

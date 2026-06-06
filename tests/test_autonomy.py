@@ -20,39 +20,82 @@ def _policy(**overrides: object) -> AutonomyPolicy:
     return AutonomyPolicy(**base)  # type: ignore[arg-type]
 
 
-# ── class_earned ─────────────────────────────────────────────────────────────
+# ── class_earned (triangulates rate + post-merge defect) ─────────────────────
+def _earned(
+    decided: int,
+    merged: int,
+    *,
+    determined: int = 5,
+    defects: int = 0,
+    **overrides: object,
+) -> tuple[bool, str | None]:
+    return class_earned(
+        decided=decided,
+        merged=merged,
+        determined=determined,
+        defects=defects,
+        policy=_policy(**overrides),
+    )
+
+
 def test_class_not_earned_below_min_decided():
-    earned, blocker = class_earned(2, 2, _policy())
+    earned, blocker = _earned(2, 2)
     assert earned is False
     assert blocker == "only 2/5 decided recently"
 
 
 def test_class_not_earned_below_min_rate():
     # 4 of 6 merged = 67% < 95%
-    earned, blocker = class_earned(6, 4, _policy())
+    earned, blocker = _earned(6, 4)
     assert earned is False
     assert blocker is not None
     assert "approval rate" in blocker
     assert "67%" in blocker
 
 
-def test_class_earned_when_rate_and_count_clear():
-    earned, blocker = class_earned(8, 8, _policy())
+def test_class_not_earned_without_enough_confirmed_outcomes():
+    # Rate is perfect, but only 1 merge has a confirmed post-merge outcome —
+    # the defect bearing has no evidence yet, so the class is not earned.
+    earned, blocker = _earned(8, 8, determined=1)
+    assert earned is False
+    assert blocker == "only 1/3 merges confirmed held"
+
+
+def test_class_not_earned_with_a_confirmed_defect():
+    # Rate perfect, enough confirmed, but one of them broke/reverted -> the
+    # second bearing fails (zero-tolerance default), so the gate stays shut.
+    earned, blocker = _earned(8, 8, determined=5, defects=1)
+    assert earned is False
+    assert blocker is not None
+    assert "defect rate" in blocker
+
+
+def test_class_earned_when_both_bearings_clear():
+    earned, blocker = _earned(8, 8, determined=5, defects=0)
     assert earned is True
     assert blocker is None
 
 
 def test_class_earned_exactly_at_thresholds():
-    # min_decided met exactly, rate exactly at the bar (1.0 >= 0.95).
-    earned, blocker = class_earned(5, 5, _policy())
+    # min_decided + rate + determined all at the bar, with 0 defects.
+    earned, blocker = _earned(5, 5, determined=3, defects=0)
     assert earned is True
+    assert blocker is None
+
+
+def test_class_earned_tolerates_defects_when_policy_allows():
+    # A non-zero max_defect_rate lets a class earn through a defect.
+    earned, blocker = _earned(
+        10, 10, determined=10, defects=1, max_defect_rate=0.2
+    )
+    assert earned is True  # 10% <= 20%
     assert blocker is None
 
 
 def test_class_earned_handles_zero_decided_without_dividing():
     # A degenerate min_decided=0 must not fall through to 0/0; an empty class
     # is simply not earned (every configured class is evaluated, incl. empty).
-    earned, blocker = class_earned(0, 0, _policy(min_decided=0))
+    earned, blocker = _earned(0, 0, determined=0, min_decided=0)
     assert earned is False
     assert blocker == "only 0/0 decided recently"
 

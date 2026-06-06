@@ -408,6 +408,7 @@ def _assemble_p(
     prs: list[GithubPr],
     bumps: list[BumpExecution],
     policy: AutonomyPolicy,
+    outcomes: dict[tuple[str, int], str] | None = None,
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
@@ -419,7 +420,13 @@ def _assemble_p(
         github=(tuple(prs), None),
         temporal=(((), tuple(bumps), (), ()), None),
         telemetry=_telemetry_off(),
+        outcomes=outcomes,
     )
+
+
+def _held(numbers: tuple[int, ...]) -> dict[tuple[str, int], str]:
+    """Post-merge outcomes marking each PR number held (the defect bearing)."""
+    return {(REPO, n): "held" for n in numbers}
 
 
 def _clean_green_merge(
@@ -445,18 +452,37 @@ def test_class_gate_earned_for_clean_green_history():
     pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3, 4)]
     prs = [p for p, _ in pairs]
     bumps = [b for _, b in pairs]
-    model = _assemble_p(prs, bumps, _allow())
+    # All four held post-merge -> the defect bearing has evidence and is clean.
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3, 4)))
     assert len(model.class_gates) == 1
     g = model.class_gates[0]
     assert (g.repo, g.loop) == (REPO, "dependency-patch")
     assert g.decided == 4
     assert g.merged == 4
     assert g.merge_rate == 1.0
+    assert g.determined == 4
+    assert g.defects == 0
+    assert g.defect_rate == 0.0
     assert g.earned is True
     assert g.blocker is None
     # 4 merges over a 90d window (~12.86 weeks); all clean+green -> reclaimable.
     assert g.approvals_per_week > 0
     assert g.reclaim_per_week == g.approvals_per_week
+
+
+def test_class_gate_not_earned_with_a_post_merge_defect():
+    # Perfect rate and enough confirmed, but one merge broke -> the second
+    # bearing fails (zero-tolerance default), so the gate stays shut.
+    pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3, 4)]
+    outcomes = {(REPO, 1): "held", (REPO, 2): "held", (REPO, 3): "held"}
+    outcomes[(REPO, 4)] = "broke"
+    model = _assemble_p(
+        [p for p, _ in pairs], [b for _, b in pairs], _allow(), outcomes
+    )
+    g = model.class_gates[0]
+    assert g.defects == 1
+    assert g.earned is False
+    assert g.blocker is not None and "defect rate" in g.blocker
 
 
 def test_class_gate_not_earned_below_min_decided():
@@ -641,7 +667,7 @@ def test_gate_marks_open_pr_would_auto_merge_on_earned_class():
             ci="passed",
         )
     )
-    model = _assemble_p(prs, bumps, _allow())
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3)))
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is True
     assert open_row.held_reason is None
@@ -662,7 +688,12 @@ def test_gate_holds_open_pr_with_reason_when_not_allowlisted():
         )
     )
     # Earned history, but the repo is NOT allowlisted -> held on the switch.
-    model = _assemble_p(prs, bumps, _allow(allowlisted_repos=frozenset()))
+    model = _assemble_p(
+        prs,
+        bumps,
+        _allow(allowlisted_repos=frozenset()),
+        outcomes=_held((1, 2, 3)),
+    )
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is False
     assert open_row.held_reason == "auto-merge not enabled for this repo"
@@ -674,7 +705,7 @@ def test_gate_holds_open_pr_on_pending_ci():
     bumps = [b for _, b in history]
     # Open, clean, but no CI reading yet -> held on CI even though earned.
     prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
-    model = _assemble_p(prs, bumps, _allow())
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3)))
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is False
     assert open_row.held_reason == "CI pending"

@@ -117,6 +117,11 @@ class ClassGate(Frozen):
         decided: PRs decided (merged or closed) in the recent window.
         merged: How many of those were merged.
         merge_rate: ``merged / decided``, or ``None`` if none decided.
+        determined: Merges with a confirmed post-merge outcome in the window
+            (held / broke / reverted) — the defect bearing's evidence.
+        defects: Of those, how many broke the branch or were reverted.
+        defect_rate: ``defects / determined``, or ``None`` if none determined —
+            the second, independent bearing the gate triangulates against.
         earned: Whether the class has earned its gate move under the policy.
         blocker: Why it has not, if it has not (else ``None``).
         approvals_per_week: The steward approvals this class costs now
@@ -132,6 +137,9 @@ class ClassGate(Frozen):
     decided: int
     merged: int
     merge_rate: float | None
+    determined: int
+    defects: int
+    defect_rate: float | None
     earned: bool
     blocker: str | None
     approvals_per_week: float

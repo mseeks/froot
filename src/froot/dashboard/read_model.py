@@ -345,7 +345,23 @@ def _class_gates(
             merged_rows = [r for r in decided_rows if r.state == "merged"]
             decided = len(decided_rows)
             merged = len(merged_rows)
-            earned, blocker = class_earned(decided, merged, policy)
+            # The post-merge defect bearing, per class (§3.8): confirmed-held
+            # outcomes and how many of those went bad. Independent of the rate.
+            determined = sum(
+                1
+                for r in merged_rows
+                if r.post_merge in ("held", "broke", "reverted")
+            )
+            defects = sum(
+                1 for r in merged_rows if r.post_merge in ("broke", "reverted")
+            )
+            earned, blocker = class_earned(
+                decided=decided,
+                merged=merged,
+                determined=determined,
+                defects=defects,
+                policy=policy,
+            )
             # Reclaim is the budget a gate *move* hands back — so it is zero
             # until the class has actually earned the move. Counting the
             # clean-and-green merges of an un-earned class would imply savings
@@ -366,6 +382,11 @@ def _class_gates(
                     decided=decided,
                     merged=merged,
                     merge_rate=(merged / decided) if decided else None,
+                    determined=determined,
+                    defects=defects,
+                    defect_rate=(
+                        (defects / determined) if determined else None
+                    ),
                     earned=earned,
                     blocker=blocker,
                     approvals_per_week=round(merged / weeks, 2),
