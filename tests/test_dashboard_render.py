@@ -344,6 +344,60 @@ def test_panel_marks_class_earned_and_shows_reclaim_budget():
     assert "reclaimable" in html  # the budget framing
 
 
+def _model_outcomes(
+    prs: Sequence[GithubPr], outcomes: dict[tuple[str, int], str]
+) -> DashboardModel:
+    telemetry = (
+        RunTelemetry(
+            available=False,
+            total_spans=0,
+            error_spans=0,
+            last_activity=None,
+            window_days=3,
+            activities=(),
+        ),
+        "off",
+    )
+    return read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=(tuple(prs), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=telemetry,
+        outcomes=outcomes,
+        reliability_window_days=90,
+    )
+
+
+def test_reliability_panel_empty_state():
+    html = render.page(_model())
+    assert "Reliability" in html
+    assert "did the merge hold" in html
+    assert "No post-merge outcomes determined yet" in html
+
+
+def test_reliability_panel_renders_outcomes_and_defect_rate():
+    prs = [
+        _pr(1, "a", "merged", opened=NOW, merged=NOW),
+        _pr(2, "b", "merged", opened=NOW, merged=NOW),
+    ]
+    outcomes = {(REPO, 1): "held", (REPO, 2): "broke"}
+    html = render.page(_model_outcomes(prs, outcomes))
+    assert ">held<" in html
+    assert ">broke<" in html
+    assert "defect rate" in html
+    assert "50%" in html  # 1 of 2 determined was a defect
+
+
+def test_bumps_table_has_held_column_and_per_row_tag():
+    prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
+    html = render.page(_model_outcomes(prs, {(REPO, 1): "reverted"}))
+    assert "held?" in html  # the new column header
+    assert "reverted" in html  # the per-row post-merge tag
+
+
 def test_shadow_badge_would_auto_merge_on_earned_allowlisted_class():
     pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3)]
     prs = [p for p, _ in pairs]

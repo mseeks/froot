@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from froot.dashboard.github_source import _to_pr as to_pr
 from froot.dashboard.github_source import (
+    _merge_index,
+    classify_check_runs,
     parse_from_version,
     parse_title,
     parse_verdict,
 )
+from froot.dashboard.github_source import _to_pr as to_pr
+
+
+def _commit(sha: str, message: str) -> dict[str, object]:
+    return {"sha": sha, "commit": {"message": message}}
 
 
 def test_parse_title_extracts_package_and_target():
@@ -86,6 +92,70 @@ def test_to_pr_distinguishes_open_from_closed_unmerged():
 
 def test_to_pr_skips_plain_issues():
     assert to_pr("acme/widgets", {"number": 1, "title": "a bug"}) is None
+
+
+# ── Post-merge outcome reader ────────────────────────────────────────────────
+def test_classify_check_runs_held_broke_unknown():
+    assert classify_check_runs({"check_runs": [{"conclusion": "success"}]}) == (
+        "held"
+    )
+    # any failing conclusion wins over a success
+    assert (
+        classify_check_runs(
+            {
+                "check_runs": [
+                    {"conclusion": "success"},
+                    {"conclusion": "failure"},
+                ]
+            }
+        )
+        == "broke"
+    )
+    # no checks at all is unknown — never conflated with a pass
+    assert classify_check_runs({"check_runs": []}) == "unknown"
+    assert classify_check_runs({}) == "unknown"
+    # an in-flight (null conclusion) run alone is unknown, not held
+    assert classify_check_runs({"check_runs": [{"conclusion": None}]}) == (
+        "unknown"
+    )
+
+
+def test_classify_check_runs_counts_cancelled_and_timed_out_as_broke():
+    for bad in ("cancelled", "timed_out", "action_required"):
+        assert (
+            classify_check_runs({"check_runs": [{"conclusion": bad}]})
+            == "broke"
+        )
+
+
+def test_merge_index_maps_merges_and_marks_reverts():
+    # newest-first, like the GitHub commits list
+    commits = [
+        _commit("rev9", 'Revert "deps: bump p2 to 1.0.1 (#2)" (#9)'),
+        _commit("sha1", "deps: bump p1 to 1.0.1 (#1)"),
+        _commit("sha2", "deps: bump p2 to 1.0.1 (#2)"),
+    ]
+    merge_sha, reverted = _merge_index(commits, frozenset({1, 2}))
+    assert merge_sha == {1: "sha1", 2: "sha2"}
+    assert reverted == {2}
+
+
+def test_merge_index_ignores_unknown_pr_numbers():
+    # a (#N) that isn't one of froot's merged numbers must not be attributed
+    commits = [_commit("x", "chore: something (#999)")]
+    merge_sha, reverted = _merge_index(commits, frozenset({1}))
+    assert merge_sha == {}
+    assert reverted == set()
+
+
+def test_merge_index_first_commit_wins_for_a_number():
+    # a later (newer) commit referencing #1 takes precedence over an older one
+    commits = [
+        _commit("newer", "deps: bump p1 to 1.0.2 (#1)"),
+        _commit("older", "deps: bump p1 to 1.0.1 (#1)"),
+    ]
+    merge_sha, _ = _merge_index(commits, frozenset({1}))
+    assert merge_sha == {1: "newer"}
 
 
 def test_to_pr_pins_offsetless_timestamp_to_utc():

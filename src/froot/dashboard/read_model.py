@@ -19,6 +19,7 @@ from froot.dashboard.model import (
     DashboardModel,
     Failure,
     Judgment,
+    Reliability,
     ReviewLoop,
     ReviewRecord,
     ReviewRow,
@@ -127,8 +128,14 @@ def _bump_rows(
     now: datetime,
     prs: tuple[GithubPr, ...],
     bumps: tuple[BumpExecution, ...],
+    outcomes: dict[tuple[str, int], str],
 ) -> tuple[BumpRow, ...]:
-    """Join GitHub PRs (authoritative) to Temporal outcomes by PR number."""
+    """Join GitHub PRs (authoritative) to Temporal outcomes by PR number.
+
+    ``outcomes`` carries the post-merge signal (``held`` / ``broke`` /
+    ``reverted`` / ``unknown``) per recently-merged ``(repo, number)``; it is
+    absent for older or non-merged PRs, which leaves ``post_merge`` ``None``.
+    """
     # Keyed on (repo, PR number), not the bare number: Temporal lists every
     # repo's bumps in the namespace, so two repos that each have a PR #N would
     # otherwise cross-attribute one's verdict/CI onto the other's row.
@@ -160,6 +167,7 @@ def _bump_rows(
                 merged_at=pr.merged_at,
                 ttm_minutes=ttm,
                 age_hours=age,
+                post_merge=outcomes.get((pr.repo, pr.number)),
             )
         )
     rows.sort(key=_opened_sort_key, reverse=True)
@@ -221,6 +229,30 @@ def _verification(rows: tuple[BumpRow, ...]) -> Verification:
         unknown=unknown,
         oracle_existed=passed + failed,
         with_reading=passed + failed + absent + timed_out,
+    )
+
+
+def _reliability(rows: tuple[BumpRow, ...], window_days: int) -> Reliability:
+    """The post-merge outcome breakdown — did the merges hold? (coarse).
+
+    Reads only the ``post_merge`` tag the outcome reader set: ``unknown`` means
+    an in-window merge we could not classify (no branch oracle / aged out), kept
+    distinct from a held one; ``None`` (older / non-merged) is not counted here.
+    The defect rate is a floor — manual and bundled reverts are invisible.
+    """
+    held = sum(1 for r in rows if r.post_merge == "held")
+    broke = sum(1 for r in rows if r.post_merge == "broke")
+    reverted = sum(1 for r in rows if r.post_merge == "reverted")
+    unverified = sum(1 for r in rows if r.post_merge == "unknown")
+    determined = held + broke + reverted
+    return Reliability(
+        held=held,
+        broke=broke,
+        reverted=reverted,
+        unverified=unverified,
+        determined=determined,
+        defect_rate=((broke + reverted) / determined) if determined else None,
+        window_days=window_days,
     )
 
 
@@ -549,13 +581,19 @@ def assemble(
         str | None,
     ],
     telemetry: tuple[RunTelemetry, str | None],
+    outcomes: dict[tuple[str, int], str] | None = None,
+    reliability_window_days: int = 90,
 ) -> DashboardModel:
-    """Build the whole view from the readers' ``(data, error)`` outputs."""
+    """Build the whole view from the readers' ``(data, error)`` outputs.
+
+    ``outcomes`` is the post-merge signal per ``(repo, number)`` from the
+    outcome reader (best-effort); absent for a merge older than the window.
+    """
     prs, github_error = github
     (scans, bumps, reviews, pr_reviews), temporal_error = temporal
     run_telemetry, clickhouse_error = telemetry
 
-    rows = _bump_rows(now, prs, bumps)
+    rows = _bump_rows(now, prs, bumps, outcomes or {})
     class_gates = _class_gates(now, rows, repos, loops, policy)
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
@@ -575,6 +613,7 @@ def assemble(
         track_record=_track_record(rows),
         class_gates=class_gates,
         verification=_verification(rows),
+        reliability=_reliability(rows, reliability_window_days),
         judgment=_judgment(rows),
         gate=_gate(rows, class_gates, policy),
         bumps=rows,

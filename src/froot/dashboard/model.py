@@ -79,6 +79,10 @@ class BumpRow(Frozen):
         would_auto_merge: For an open PR, whether it would auto-merge under the
             advisory earned-autonomy grant (the shadow gate; nothing acts).
         held_reason: Why an open PR would *not* auto-merge, the first blocker.
+        post_merge: For a merged PR, whether the merge *held* — ``held`` (the
+            branch's CI stayed green after the merge), ``broke`` (it went red),
+            ``reverted`` (a later commit reverted it), or ``None`` when no
+            post-merge signal is recoverable (the outcome leg, coarse).
     """
 
     repo: str
@@ -97,6 +101,7 @@ class BumpRow(Frozen):
     age_hours: float | None
     would_auto_merge: bool = False
     held_reason: str | None = None
+    post_merge: str | None = None
 
 
 class ClassGate(Frozen):
@@ -229,6 +234,37 @@ class Verification(Frozen):
     with_reading: int
 
 
+class Reliability(Frozen):
+    """Did the merges *hold*? — the post-merge outcome leg (coarse, low-recall).
+
+    A merge is not the same as a success: the success leg is whether the merge
+    *held* once it landed. This breaks recent merges into held / broke /
+    reverted, with the honest caveat that it sees only what the default branch's
+    CI and git-reverts reveal — a manual or bundled revert is invisible, so the
+    defect rate is a *floor*, not the truth. It is the natural-traffic bearing
+    the adversarial canary leg exercises.
+
+    Attributes:
+        held: Merges whose branch CI stayed green after the merge.
+        broke: Merges whose branch CI went red after the merge.
+        reverted: Merges a later commit git-reverted (the minority that are).
+        unverified: Merges with no recoverable post-merge signal (no branch
+            oracle, or aged past the commit window) — never counted as held.
+        determined: ``held + broke + reverted`` — merges actually classified.
+        defect_rate: ``(broke + reverted) / determined``, or ``None`` if none
+            were determined. A floor on the true defect rate, by construction.
+        window_days: The look-back window over merges considered.
+    """
+
+    held: int
+    broke: int
+    reverted: int
+    unverified: int
+    determined: int
+    defect_rate: float | None
+    window_days: int
+
+
 class Judgment(Frozen):
     """The model's changelog-verdict mix and its calibration against CI.
 
@@ -327,6 +363,7 @@ class DashboardModel(Frozen):
         track_record: The reputation headline.
         class_gates: The earned-autonomy standing per (repo, loop) — advisory.
         verification: The CI-oracle breakdown.
+        reliability: Did the merges hold post-merge (the outcome leg, coarse).
         judgment: The model-verdict mix and calibration.
         gate: Open PRs awaiting a human, the freshest last.
         bumps: Every proposed bump, newest first (the detail behind the stats).
@@ -346,6 +383,7 @@ class DashboardModel(Frozen):
     track_record: TrackRecord
     class_gates: tuple[ClassGate, ...]
     verification: Verification
+    reliability: Reliability
     judgment: Judgment
     gate: tuple[BumpRow, ...]
     bumps: tuple[BumpRow, ...]

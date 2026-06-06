@@ -510,6 +510,73 @@ def test_class_gate_reclaim_excludes_unverified_merges():
     assert g.reclaim_per_week == 0.0
 
 
+# ── Reliability (post-merge outcome leg) ─────────────────────────────────────
+def _assemble_outcomes(
+    prs: list[GithubPr], outcomes: dict[tuple[str, int], str]
+) -> DashboardModel:
+    return read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=(tuple(prs), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=_telemetry_off(),
+        outcomes=outcomes,
+        reliability_window_days=90,
+    )
+
+
+def test_reliability_counts_and_defect_rate():
+    prs = [
+        _pr(1, "a", "merged", opened=NOW, merged=NOW),
+        _pr(2, "b", "merged", opened=NOW, merged=NOW),
+        _pr(3, "c", "merged", opened=NOW, merged=NOW),
+        _pr(4, "d", "merged", opened=NOW, merged=NOW),
+    ]
+    outcomes = {
+        (REPO, 1): "held",
+        (REPO, 2): "held",
+        (REPO, 3): "broke",
+        (REPO, 4): "reverted",
+    }
+    r = _assemble_outcomes(prs, outcomes).reliability
+    assert (r.held, r.broke, r.reverted) == (2, 1, 1)
+    assert r.determined == 4
+    assert r.unverified == 0
+    assert r.defect_rate == 0.5  # (1 broke + 1 reverted) / 4
+
+
+def test_reliability_unknown_is_unverified_not_held():
+    prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
+    r = _assemble_outcomes(prs, {(REPO, 1): "unknown"}).reliability
+    assert r.unverified == 1
+    assert r.held == 0
+    assert r.determined == 0
+    assert r.defect_rate is None  # nothing determined -> no rate, not 0%
+
+
+def test_post_merge_none_when_outcome_absent():
+    # A merged PR with no outcome entry (older than the window) carries no
+    # post_merge tag and is not counted in reliability.
+    prs = [_pr(9, "old", "merged", opened=NOW, merged=NOW)]
+    model = _assemble_outcomes(prs, {})
+    assert model.bumps[0].post_merge is None
+    rel = model.reliability
+    assert (rel.held, rel.broke, rel.reverted, rel.unverified) == (0, 0, 0, 0)
+
+
+def test_post_merge_tag_attaches_to_the_right_row():
+    prs = [
+        _pr(1, "a", "merged", opened=NOW, merged=NOW),
+        _pr(2, "b", "merged", opened=NOW, merged=NOW),
+    ]
+    model = _assemble_outcomes(prs, {(REPO, 1): "broke"})
+    by_num = {r.pr_number: r.post_merge for r in model.bumps}
+    assert by_num[1] == "broke"
+    assert by_num[2] is None
+
+
 def test_class_gate_reclaim_is_zero_until_earned():
     # Two clean+green merges, but min_decided=5 -> the class is NOT earned, so
     # reclaim is zero: an un-earned class's gate would not move, hence reclaims

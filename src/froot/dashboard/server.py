@@ -80,21 +80,33 @@ async def build_html(client: Client) -> str:
     """Derive the whole view live and render it (the per-request work)."""
     now = datetime.now(UTC)
     repos, loops, interval = _config()
+    policy = _autonomy_policy()
     github_result, temporal_result, telemetry_result = await asyncio.gather(
         github_source.fetch(repos),
         temporal_source.fetch(client),
         clickhouse_source.fetch(),
     )
+    # The post-merge outcome leg needs the merged PRs first, so it runs after
+    # the GitHub read (a handful of extra calls, best-effort). It shares the
+    # autonomy window so "recent" means the same thing across the page.
+    prs, _ = github_result
+    outcomes, outcome_error = await github_source.fetch_outcomes(
+        repos, prs, now=now, window_days=policy.window_days
+    )
+    if outcome_error is not None:
+        _log.warning("post-merge outcome read degraded: %s", outcome_error)
     model = read_model.assemble(
         now=now,
         repos=repos,
         loops=loops,
-        policy=_autonomy_policy(),
+        policy=policy,
         scan_interval_seconds=interval,
         review_interval_seconds=_review_interval(),
         github=github_result,
         temporal=temporal_result,
         telemetry=telemetry_result,
+        outcomes=outcomes,
+        reliability_window_days=policy.window_days,
     )
     return render.page(model)
 

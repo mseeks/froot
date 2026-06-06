@@ -102,6 +102,12 @@ _CI_CLASS = {
     "timed_out": "warn",
 }
 _VERDICT_CLASS = {"clean": "ok", "risky": "warn", "unknown": "mut"}
+_POST_MERGE_CLASS = {
+    "held": "ok",
+    "broke": "bad",
+    "reverted": "bad",
+    "unknown": "mut",
+}
 
 
 def _aware(when: datetime) -> datetime:
@@ -348,6 +354,41 @@ def _verification(model: DashboardModel) -> str:
     )
 
 
+def _reliability(model: DashboardModel) -> str:
+    r = model.reliability
+    rate = "—" if r.defect_rate is None else f"{r.defect_rate * 100:.0f}%"
+    stats = "".join(
+        (
+            _stat(r.held, "held"),
+            _stat(r.broke, "broke"),
+            _stat(r.reverted, "reverted"),
+            _stat(r.unverified, "unverified"),
+            _stat(rate, "defect rate"),
+        )
+    )
+    if r.determined == 0:
+        note = (
+            '<p class="note">No post-merge outcomes determined yet '
+            f"(last {r.window_days}d). A merge is only a *success* once it "
+            "holds; until then it&rsquo;s just merged.</p>"
+        )
+    else:
+        note = _why(
+            '<p class="note">Did the merge <b>hold</b>? &mdash; the outcome '
+            "leg, the only bearing that watches what actually shipped. "
+            f"<b>{r.determined}</b> of the recent merges were classifiable; "
+            "the defect rate is a <b>floor</b>, not the truth: it sees the "
+            "branch&rsquo;s CI and git-reverts, but a <i>manual</i> or "
+            "<i>bundled</i> revert (most of them) is invisible. "
+            '<span class="mut">&lsquo;unverified&rsquo; means no branch '
+            "oracle &mdash; never counted as held.</span></p>"
+        )
+    return (
+        "<section><h2>Reliability &middot; did the merge hold?</h2>"
+        f'<div class="stats">{stats}</div>{note}</section>'
+    )
+
+
 def _judgment(model: DashboardModel) -> str:
     j = model.judgment
     stats = "".join(
@@ -435,6 +476,7 @@ def _bumps(model: DashboardModel) -> str:
             f"<td>{_tag(row.verdict, _VERDICT_CLASS)}</td>"
             f"<td>{_tag(row.ci, _CI_CLASS)}</td>"
             f"<td>{_state_tag(row.state)}</td>"
+            f"<td>{_tag(row.post_merge, _POST_MERGE_CLASS)}</td>"
             f'<td class="mut">{escape(_ago(row.opened_at, now))}</td>'
             f"<td>{_pr_link(row)}</td>"
             "</tr>"
@@ -442,7 +484,8 @@ def _bumps(model: DashboardModel) -> str:
         )
         body = (
             "<table><thead><tr><th>package</th><th>bump</th><th>verdict</th>"
-            "<th>ci</th><th>state</th><th>opened</th><th>pr</th></tr></thead>"
+            "<th>ci</th><th>state</th><th>held?</th><th>opened</th><th>pr</th>"
+            "</tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
     return f"<section><h2>Bumps &middot; the detail</h2>{body}</section>"
@@ -728,6 +771,7 @@ def page(model: DashboardModel) -> str:
                 _track_record(model),
                 _class_gates(model),
                 _verification(model),
+                _reliability(model),
                 _judgment(model),
                 _gate(model),
                 _bumps(model),
