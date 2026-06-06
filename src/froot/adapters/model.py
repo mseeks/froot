@@ -32,7 +32,7 @@ def build_model(
     Args:
         model_name: Override the model; defaults to
             ``ModelSettings.ollama_model`` (``$FROOT_OLLAMA_MODEL`` or
-            ``gemma4:e4b``).
+            ``gemma4:26b``).
         base_url: Override the endpoint; defaults to
             ``ModelSettings.ollama_url`` (``$FROOT_OLLAMA_URL`` or the local
             Ollama ``/v1``).

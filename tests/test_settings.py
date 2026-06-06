@@ -141,7 +141,7 @@ def test_model_settings_defaults_and_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("FROOT_OLLAMA_MODEL", raising=False)
     monkeypatch.delenv("FROOT_OLLAMA_URL", raising=False)
     defaults = ModelSettings()
-    assert defaults.ollama_model == "gemma4:e4b"
+    assert defaults.ollama_model == "gemma4:26b"
     assert defaults.ollama_url.endswith("/v1")
     monkeypatch.setenv("FROOT_OLLAMA_MODEL", "gemma4:e2b")
     monkeypatch.setenv("FROOT_OLLAMA_URL", "http://ollama.llm:11434/v1")

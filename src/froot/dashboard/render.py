@@ -680,7 +680,7 @@ def _footer() -> str:
         "merge (commit authority = none). Trust, when any is granted, is "
         "earned, narrow to a single loop on a single repo (a version bump is "
         "not a security patch; they never share a record), conditional on its "
-        'environment (judge <span class="mono">gemma4:e4b</span>, '
+        'environment (judge <span class="mono">gemma4:26b</span>, '
         "lockfile-only regen), revocable, and time-expiring. Today it records "
         "the track "
         "record and renders a <b>shadow gate</b> &mdash; a dry run of the "
