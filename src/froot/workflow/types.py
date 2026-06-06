@@ -40,17 +40,30 @@ class ScanResult(Frozen):
         dispatched: Candidates handed to a bump loop. Dispatch is idempotent
             (a no-op when a bump for that identity is already in flight), so
             this counts candidates dispatched, not necessarily newly started.
+        reconciled: froot PRs closed this tick as superseded or already
+            satisfied (zero when the reconcile sweep is disabled).
     """
 
     found: int
     dispatched: int
+    reconciled: int = 0
 
 
 class BumpParams(Frozen):
-    """Input to a single bump's loop."""
+    """Input to a single bump's loop.
+
+    Attributes:
+        target: The repo the bump is proposed against.
+        candidate: The bump being proposed.
+        close_on_red: Whether a red CI result should close the PR (and delete
+            its branch). Pinned at dispatch from ``FROOT_CLOSE_ON_RED`` so the
+            running bump keeps the value it started with, never reading config
+            from inside the deterministic workflow.
+    """
 
     target: TargetRepo
     candidate: PatchCandidate
+    close_on_red: bool = True
 
 
 class OpenPrInput(Frozen):
@@ -73,6 +86,20 @@ class RecordInput(Frozen):
 
     target: TargetRepo
     outcome: LoopOutcome
+
+
+class CloseInput(Frozen):
+    """Input to the close-pull-request activity (the close-on-red path).
+
+    Attributes:
+        target: The repo the PR lives on.
+        pr: The PR to close (its branch is deleted with it).
+        failing: The names of the checks that failed, for the close comment.
+    """
+
+    target: TargetRepo
+    pr: PullRequestRef
+    failing: tuple[str, ...] = ()
 
 
 class DispatchInput(Frozen):

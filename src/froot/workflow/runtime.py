@@ -35,6 +35,8 @@ ALL_ACTIVITIES: list[Callable[..., object]] = [
     activities.open_pull_request,
     activities.check_ci,
     activities.record_outcome,
+    activities.close_pull_request,
+    activities.reconcile_open_prs,
     activities.dispatch_bump,
     activities.list_review_prs,
     activities.dispatch_pr_review,

@@ -313,6 +313,37 @@ class GitHubForge:
             )
         _raise_for_status(resp)
 
+    async def close_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        branch: BranchName,
+        *,
+        delete_branch: bool = True,
+    ) -> None:
+        """Close the PR and (by default) delete its head branch.
+
+        Two idempotent GitHub calls: PATCH the PR to ``state=closed`` (a no-op
+        if it is already closed), then DELETE the head ref. A 404/422 on the
+        delete (branch already gone — e.g. the repo auto-deletes head branches
+        on close) is tolerated, so a retried close never fails on a branch a
+        prior attempt already removed.
+        """
+        slug = target.repo.slug
+        async with _client() as client:
+            close_resp = await client.patch(
+                f"/repos/{slug}/pulls/{number}",
+                json={"state": "closed"},
+            )
+            _raise_for_status(close_resp)
+            if not delete_branch:
+                return
+            delete_resp = await client.delete(
+                f"/repos/{slug}/git/refs/heads/{branch.value}"
+            )
+        if delete_resp.status_code not in (404, 422):
+            _raise_for_status(delete_resp)
+
     async def upsert_issue_comment(
         self, target: TargetRepo, number: int, marker: str, body: str
     ) -> str:

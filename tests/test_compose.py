@@ -2,9 +2,29 @@ from __future__ import annotations
 
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
 from froot.domain.ecosystem import Ecosystem
-from froot.policy.compose import PR_LABELS, pull_request_draft
+from froot.policy.compose import (
+    CLOSE_MARKER,
+    PR_LABELS,
+    closed_on_red_comment,
+    pull_request_draft,
+)
 from froot.policy.naming import branch_name
 from tests.support import make_candidate, make_repo
+
+
+def test_closed_on_red_comment_names_failing_checks():
+    body = closed_on_red_comment(("build", "tests"))
+    assert CLOSE_MARKER in body  # goes through the idempotent comment path
+    assert "`build`" in body
+    assert "`tests`" in body
+    assert "re-propose" in body or "propose it fresh" in body
+
+
+def test_closed_on_red_comment_without_check_names():
+    # GitHub didn't report specific failing checks: still a coherent message.
+    body = closed_on_red_comment(())
+    assert CLOSE_MARKER in body
+    assert "CI did not pass." in body
 
 
 def test_pull_request_draft_clean():

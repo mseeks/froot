@@ -19,7 +19,11 @@ with workflow.unsafe.imports_passed_through():
     from froot.domain.determinism import FrontierVerdict, PrReviewResult
     from froot.policy.review_comment import synthesize_findings
     from froot.workflow import activities
-    from froot.workflow.constants import ACTIVITY_TIMEOUT, CI_CHECK_TIMEOUT
+    from froot.workflow.constants import (
+        ACTIVITY_TIMEOUT,
+        CI_CHECK_TIMEOUT,
+        TOOL_RETRY,
+    )
     from froot.workflow.types import (
         AdjudicateInput,
         PostReviewInput,
@@ -38,6 +42,7 @@ class PrReviewWorkflow:
             activities.analyze_pr,
             params,
             start_to_close_timeout=ACTIVITY_TIMEOUT,
+            retry_policy=TOOL_RETRY,
         )
         verdicts: tuple[FrontierVerdict, ...] = ()
         if analysis.frontier:
@@ -45,6 +50,7 @@ class PrReviewWorkflow:
                 activities.adjudicate_frontier,
                 AdjudicateInput(frontier=analysis.frontier),
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
+                retry_policy=TOOL_RETRY,
             )
         findings = synthesize_findings(
             analysis.hazards, analysis.frontier, verdicts
@@ -55,6 +61,7 @@ class PrReviewWorkflow:
                 target=params.target, pr=params.pr, findings=findings
             ),
             start_to_close_timeout=CI_CHECK_TIMEOUT,
+            retry_policy=TOOL_RETRY,
         )
         return PrReviewResult(
             pr_number=params.pr.number,

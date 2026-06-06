@@ -14,15 +14,32 @@ permissions:
   contents: read
 
 jobs:
-  determinism:
-    name: temporal determinism (workflow boundary)
+  lexical:
+    name: temporal determinism (lexical kernel)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      # Stdlib-only AST check — no install needed. Flags known-nondeterministic
-      # calls written lexically inside an @workflow.defn class. High precision by
-      # design (lexical scope only); transitive analysis is a later advisory ring.
+      # Stdlib-only AST check — no install needed (runs even if deps are broken).
+      # Flags known-nondeterministic calls written lexically inside an
+      # @workflow.defn class. High precision by design (lexical scope only); the
+      # transitive job below is the second ring.
       - run: python scripts/check_determinism.py src
+
+  transitive:
+    name: temporal determinism (transitive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      # froot dogfooding its own transitive analyzer over its own workflows —
+      # chasing first-party helpers out of each @workflow.defn, so a hazard
+      # hidden behind an imported helper fails the gate too. Imports froot, so
+      # it needs the synced env (unlike the install-free lexical kernel).
+      - run: uv sync --extra dev --extra ai --extra github --extra otel
+      - run: uv run python scripts/check_determinism_transitive.py

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from froot.config.settings import (
+    BehaviorSettings,
     GitHubSettings,
     ModelSettings,
     Settings,
@@ -11,6 +12,26 @@ from froot.config.settings import (
     TemporalSettings,
 )
 from froot.domain.ecosystem import Ecosystem
+
+
+def test_behavior_defaults_on(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("FROOT_CLOSE_ON_RED", raising=False)
+    monkeypatch.delenv("FROOT_RECONCILE", raising=False)
+    behavior = BehaviorSettings()
+    assert behavior.close_on_red is True
+    assert behavior.reconcile is True
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("1", True), ("true", True), ("on", True), ("", True), ("0", False)],
+)
+def test_behavior_close_on_red_parsing(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: bool
+):
+    # Blank defaults on (the _blank_is_on validator); explicit 0 turns it off.
+    monkeypatch.setenv("FROOT_CLOSE_ON_RED", value)
+    assert BehaviorSettings().close_on_red is expected
 
 
 def test_parses_repo_slugs(monkeypatch: pytest.MonkeyPatch):

@@ -48,6 +48,20 @@ def make_candidate(
     )
 
 
+def make_upgrade(
+    package: str = "left-pad",
+    current: str = "1.4.2",
+    available: tuple[str, ...] = ("1.4.3",),
+    ecosystem: Ecosystem = Ecosystem.NPM,
+) -> AvailableUpgrade:
+    return AvailableUpgrade(
+        package=package,
+        ecosystem=ecosystem,
+        current=ver(current),
+        available=tuple(ver(v) for v in available),
+    )
+
+
 def make_repo(
     slug: str = "acme/widgets",
     default_branch: str = "main",
@@ -82,17 +96,26 @@ class FakeForge:
         existing_pr: PullRequestRef | None = None,
         opened_pr: PullRequestRef | None = None,
         ci: CIStatus | None = None,
+        ci_sequence: tuple[CIStatus, ...] = (),
         open_prs: tuple[PullRequestRef, ...] = (),
     ) -> None:
         self.existing_pr = existing_pr
         self.opened_pr = opened_pr or make_pr()
         self.ci: CIStatus = ci or CIPassed()
+        # A scripted CI reply sequence the poll pops through (then falls back to
+        # ``ci``), so a test can exercise the durable pending -> terminal wait.
+        self._ci_replies = list(ci_sequence)
         self.open_prs = open_prs
         self.checked_out = False
         self.checked_out_pr: int | None = None
         self.pushed: BranchName | None = None
         self.labeled: tuple[str, ...] | None = None
         self.upserted: tuple[int, str] | None = None
+        # Every close + branch-delete, in order, so reconcile/close-on-red
+        # tests can assert exactly which PRs were closed.
+        self.closed: list[int] = []
+        self.deleted_branches: list[BranchName] = []
+        self.comments: list[tuple[int, str]] = []
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         self.checked_out = True
@@ -122,6 +145,7 @@ class FakeForge:
         self, target: TargetRepo, number: int, marker: str, body: str
     ) -> str:
         self.upserted = (number, body)
+        self.comments.append((number, body))
         return f"https://github.com/{target.repo.slug}/pull/{number}#comment"
 
     async def open_pull_request(
@@ -130,12 +154,26 @@ class FakeForge:
         return self.opened_pr
 
     async def ci_status(self, target: TargetRepo, head_sha: str) -> CIStatus:
+        if self._ci_replies:
+            return self._ci_replies.pop(0)
         return self.ci
 
     async def add_labels(
         self, target: TargetRepo, number: int, labels: tuple[str, ...]
     ) -> None:
         self.labeled = labels
+
+    async def close_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        branch: BranchName,
+        *,
+        delete_branch: bool = True,
+    ) -> None:
+        self.closed.append(number)
+        if delete_branch:
+            self.deleted_branches.append(branch)
 
 
 class FakePackageManager:

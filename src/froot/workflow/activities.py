@@ -35,6 +35,7 @@ from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
 from froot.workflow.types import (
     AdjudicateInput,
     CiCheckInput,
+    CloseInput,
     DispatchInput,
     DispatchReviewInput,
     OpenPrInput,
@@ -45,6 +46,7 @@ from froot.workflow.types import (
 
 _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
+_reconcile_log = logging.getLogger("froot.reconcile")
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -73,14 +75,33 @@ async def scan_candidates(
 
 @activity.defn
 async def judge_changelog(candidate: PatchCandidate) -> ChangelogVerdict:
-    """Fetch the candidate's changelog and get the model's typed verdict."""
+    """Fetch the candidate's changelog and get the model's typed verdict.
+
+    The model is froot's one thin, non-load-bearing judgment: a clean verdict
+    never *gates* a PR (CI is the oracle), so a model that is down, slow, or
+    erroring must not stall the spine. A judge failure degrades to
+    ``UnknownVerdict`` — the bump proceeds, the human still gets the PR, and the
+    dashboard records the verdict as unknown — rather than failing (and then
+    retrying) the activity. Only the model call is guarded; the fetch is already
+    best-effort (returns ``None``, not an exception).
+    """
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
     changelog = await HttpChangelogSource().fetch(candidate)
     if changelog is None:
         return UnknownVerdict(rationale="No changelog could be fetched.")
-    return await PydanticAiJudge().judge(changelog)
+    try:
+        return await PydanticAiJudge().judge(changelog)
+    except Exception as exc:
+        activity.logger.warning(
+            "changelog judge unavailable for %s; degrading to unknown: %r",
+            candidate.package,
+            exc,
+        )
+        return UnknownVerdict(
+            rationale=f"Changelog judge unavailable ({type(exc).__name__})."
+        )
 
 
 @activity.defn
@@ -142,10 +163,16 @@ async def record_outcome(params: RecordInput) -> None:
 
 @activity.defn
 async def dispatch_bump(params: DispatchInput) -> None:
-    """Start the bump loop for a candidate (idempotent per bump identity)."""
+    """Start the bump loop for a candidate (idempotent per bump identity).
+
+    Reads the close-on-red toggle here, at the impure boundary, and pins it onto
+    the bump's params — so the running workflow never reads config itself and an
+    in-flight bump keeps the value it was dispatched with.
+    """
     from temporalio.common import WorkflowIDReusePolicy
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
+    from froot.config.settings import BehaviorSettings
     from froot.workflow.bump_workflow import BumpWorkflow
     from froot.workflow.temporal_client import client, task_queue
     from froot.workflow.types import BumpParams
@@ -154,7 +181,11 @@ async def dispatch_bump(params: DispatchInput) -> None:
     try:
         await temporal.start_workflow(
             BumpWorkflow.run,
-            BumpParams(target=params.target, candidate=params.candidate),
+            BumpParams(
+                target=params.target,
+                candidate=params.candidate,
+                close_on_red=BehaviorSettings().close_on_red,
+            ),
             id=bump_workflow_id(params.target, params.candidate),
             task_queue=task_queue(),
             id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -163,6 +194,92 @@ async def dispatch_bump(params: DispatchInput) -> None:
         # This bump already has a loop (running or completed) — a no-op, so
         # re-scanning never opens a second PR for the same bump.
         return
+
+
+@activity.defn
+async def close_pull_request(params: CloseInput) -> None:
+    """Comment why, then close a red bump's PR and delete its branch.
+
+    The note goes through the idempotent ``upsert_issue_comment`` and the close
+    itself is idempotent, so a retried close edits its comment in place and
+    never double-posts. The bump's record step still runs after this, so the red
+    outcome is logged either way.
+    """
+    from froot.adapters.github import GitHubForge
+    from froot.policy.compose import CLOSE_MARKER, closed_on_red_comment
+
+    forge = GitHubForge()
+    body = closed_on_red_comment(params.failing)
+    await forge.upsert_issue_comment(
+        params.target, params.pr.number, CLOSE_MARKER, body
+    )
+    await forge.close_pull_request(
+        params.target, params.pr.number, params.pr.branch
+    )
+    _log.info(
+        json.dumps(
+            {
+                "event": "pr_closed",
+                "loop": "dependency-patch",
+                "reason": "ci_red",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "pr_url": params.pr.url,
+                "failing": list(params.failing),
+            }
+        )
+    )
+
+
+@activity.defn
+async def reconcile_open_prs(target: TargetRepo) -> int:
+    """Close froot PRs a newer patch superseded or the base already satisfied.
+
+    Self-contained: lists the repo's open PRs, re-derives the live upgrade facts
+    (a fresh checkout + the package manager's read — derive, never store), asks
+    the pure :func:`~froot.policy.reconcile.reconciliations` policy which to
+    close, and closes each (deleting its branch). A no-op when reconcile is off
+    (``FROOT_RECONCILE``). Returns the number closed.
+    """
+    from froot.adapters.github import GitHubForge
+    from froot.adapters.registry import package_manager_for
+    from froot.config.settings import BehaviorSettings
+    from froot.policy.compose import CLOSE_MARKER
+    from froot.policy.reconcile import reconciliations
+
+    if not BehaviorSettings().reconcile:
+        return 0
+
+    forge = GitHubForge()
+    package_manager = package_manager_for(target.ecosystem)
+    open_prs = await forge.list_open_pull_requests(target)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        await forge.checkout(target, workspace)
+        upgrades = await package_manager.list_upgrades(
+            target, _manifest_dir(target, workspace)
+        )
+    closures = reconciliations(open_prs, upgrades)
+    for closure in closures:
+        await forge.upsert_issue_comment(
+            target, closure.pr.number, CLOSE_MARKER, closure.comment
+        )
+        await forge.close_pull_request(
+            target, closure.pr.number, closure.pr.branch
+        )
+    if closures:
+        _reconcile_log.info(
+            json.dumps(
+                {
+                    "event": "reconcile",
+                    "loop": "dependency-patch",
+                    "repo": target.repo.slug,
+                    "closed": len(closures),
+                    "prs": [closure.pr.number for closure in closures],
+                }
+            )
+        )
+    return len(closures)
 
 
 # ── The determinism reviewer (the transitive ring) ──────────────────────────

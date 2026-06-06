@@ -35,6 +35,12 @@ _LABEL_NAMESPACE = "froot"
 # re-runs.
 PR_LABELS: tuple[str, str] = (_LABEL_NAMESPACE, "dependency-patch")
 
+# Tags the comment froot leaves when it closes one of its own PRs (red CI, or a
+# reconcile sweep). The marker lets the close go through the idempotent
+# upsert_issue_comment path, so a retried close edits its note in place instead
+# of stacking a second one.
+CLOSE_MARKER = "<!-- froot:closed -->"
+
 
 def _changed_files(ecosystem: Ecosystem) -> str:
     """Describe which files a bump rewrites, for the PR body.
@@ -100,4 +106,25 @@ def pull_request_draft(
         base=target.default_branch,
         title=f"deps: bump {candidate.package} to {candidate.target}",
         body=body,
+    )
+
+
+def closed_on_red_comment(failing: tuple[str, ...]) -> str:
+    """The note froot leaves when it closes a PR for failing CI.
+
+    Names the failing checks (when GitHub reported them) so the human sees why
+    without opening the checks tab, and states froot's contract: it will
+    re-propose the same bump if a newer patch is published. Carries
+    :data:`CLOSE_MARKER` so the close posts through the idempotent comment path.
+    """
+    checks = ", ".join(f"`{name}`" for name in failing)
+    reason = f"CI did not pass ({checks})." if checks else "CI did not pass."
+    return "\n".join(
+        (
+            CLOSE_MARKER,
+            f"froot closed this PR: {reason}",
+            "",
+            "The change wasn't safe to merge, so froot won't leave it open. "
+            "If a newer patch is published, froot will propose it fresh.",
+        )
     )

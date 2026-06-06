@@ -19,7 +19,11 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from froot.workflow import activities
-    from froot.workflow.constants import ACTIVITY_TIMEOUT, DISPATCH_TIMEOUT
+    from froot.workflow.constants import (
+        ACTIVITY_TIMEOUT,
+        DISPATCH_TIMEOUT,
+        TOOL_RETRY,
+    )
     from froot.workflow.types import DispatchInput, ScanParams, ScanResult
 
 
@@ -29,19 +33,33 @@ class ScanWorkflow:
 
     @workflow.run
     async def run(self, params: ScanParams) -> ScanResult:
-        """Scan for patch candidates, dispatch each, then loop or return."""
+        """Scan, dispatch each, reconcile stale PRs, then loop or return."""
         candidates = await workflow.execute_activity(
             activities.scan_candidates,
             params.target,
             start_to_close_timeout=ACTIVITY_TIMEOUT,
+            retry_policy=TOOL_RETRY,
         )
         for candidate in candidates:
             await workflow.execute_activity(
                 activities.dispatch_bump,
                 DispatchInput(target=params.target, candidate=candidate),
                 start_to_close_timeout=DISPATCH_TIMEOUT,
+                retry_policy=TOOL_RETRY,
             )
-        result = ScanResult(found=len(candidates), dispatched=len(candidates))
+        # Close froot PRs a newer patch superseded or the base already
+        # satisfied — re-derived from the repo each tick, same as the scan.
+        reconciled = await workflow.execute_activity(
+            activities.reconcile_open_prs,
+            params.target,
+            start_to_close_timeout=ACTIVITY_TIMEOUT,
+            retry_policy=TOOL_RETRY,
+        )
+        result = ScanResult(
+            found=len(candidates),
+            dispatched=len(candidates),
+            reconciled=reconciled,
+        )
         if not params.continuous:
             return result
         # Durable loop: sleep, then restart fresh. continue_as_new raises, so
