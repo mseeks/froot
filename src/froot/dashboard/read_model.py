@@ -170,6 +170,7 @@ def _bump_rows(
                 ttm_minutes=ttm,
                 age_hours=age,
                 post_merge=outcomes.get((pr.repo, pr.number)),
+                env=pr.env,
             )
         )
     rows.sort(key=_opened_sort_key, reverse=True)
@@ -321,20 +322,23 @@ def _class_gates(
     repos: tuple[str, ...],
     loops: tuple[Loop, ...],
     policy: AutonomyPolicy,
+    environment: str,
 ) -> tuple[ClassGate, ...]:
     """The earned-autonomy standing of each (repo, loop) class (advisory).
 
     Counts only PRs *decided within the window* — trust is recent, not lifetime
-    (§2.11) — so a class that stops shipping decays back below its gate. The
-    budget figures (approvals / reclaim per week) translate the record into the
-    steward-time MHE actually meters (§3.6): what the class costs now, and what
+    (§2.11) — *and* earned under the current ``environment`` (§3.7's conditional
+    property): a PR opened under a different judge model no longer counts, so a
+    model swap resets the class. ``prior_env_decided`` keeps that reset legible.
+    The budget figures (approvals / reclaim per week) translate the record into
+    the steward-time MHE meters (§3.6): what the class costs now, and what
     moving its gate would hand back.
     """
     weeks = max(policy.window_days / 7.0, 1.0)
     gates: list[ClassGate] = []
     for loop in loops:
         for repo in repos:
-            decided_rows = [
+            in_window = [
                 r
                 for r in rows
                 if r.repo == repo
@@ -342,6 +346,12 @@ def _class_gates(
                 and r.state in ("merged", "closed")
                 and _within(_decided_at(r), now, policy.window_days)
             ]
+            # An empty ``environment`` means "don't filter" (none configured);
+            # otherwise only PRs stamped with the current one count.
+            decided_rows = [
+                r for r in in_window if not environment or r.env == environment
+            ]
+            prior_env_decided = len(in_window) - len(decided_rows)
             merged_rows = [r for r in decided_rows if r.state == "merged"]
             decided = len(decided_rows)
             merged = len(merged_rows)
@@ -387,6 +397,7 @@ def _class_gates(
                     defect_rate=(
                         (defects / determined) if determined else None
                     ),
+                    prior_env_decided=prior_env_decided,
                     earned=earned,
                     blocker=blocker,
                     approvals_per_week=round(merged / weeks, 2),
@@ -621,6 +632,7 @@ def assemble(
     telemetry: tuple[RunTelemetry, str | None],
     outcomes: dict[tuple[str, int], str] | None = None,
     reliability_window_days: int = 90,
+    environment: str = "",
 ) -> DashboardModel:
     """Build the whole view from the readers' ``(data, error)`` outputs.
 
@@ -637,7 +649,7 @@ def assemble(
     # pollute the real reputation; they get their own tally.
     canary_rows = tuple(r for r in all_rows if is_canary(r.to_version))
     rows = tuple(r for r in all_rows if not is_canary(r.to_version))
-    class_gates = _class_gates(now, rows, repos, loops, policy)
+    class_gates = _class_gates(now, rows, repos, loops, policy, environment)
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
     return DashboardModel(

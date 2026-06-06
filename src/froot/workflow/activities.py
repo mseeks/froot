@@ -227,13 +227,22 @@ async def check_ci(params: CiCheckInput) -> CIStatus:
 
 @activity.defn
 async def record_outcome(params: RecordInput) -> None:
-    """Label the PR and log the run telemetry — the signal-update."""
+    """Label the PR and log the run telemetry — the signal-update.
+
+    The labels carry the loop *and* the judgment environment (the judge model)
+    the PR was opened under, so the gate can count only the track record earned
+    under the current environment and reset it when the model changes (§3.7).
+    """
     from froot.adapters.github import GitHubForge
+    from froot.config.settings import ModelSettings
+    from froot.policy.environment import env_label
 
     outcome = params.outcome
-    await GitHubForge().add_labels(
-        params.target, outcome.pr.number, pr_labels(params.loop)
+    labels = (
+        *pr_labels(params.loop),
+        env_label(ModelSettings().ollama_model),
     )
+    await GitHubForge().add_labels(params.target, outcome.pr.number, labels)
     _log.info(
         json.dumps(
             {

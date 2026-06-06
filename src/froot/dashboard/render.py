@@ -263,11 +263,22 @@ def _rate_cell(rate: float | None) -> str:
 
 
 def _earned_cell(g: ClassGate) -> str:
-    """A class's gate standing: a green 'earned', else the muted blocker."""
+    """A class's gate standing: a green 'earned', else the muted blocker.
+
+    A model change resets the record (§3.7), which can read as a mysterious drop
+    to zero; when prior-environment history exists, it is named so the reset is
+    legible rather than alarming.
+    """
+    reset = (
+        f' <span class="mut">&middot; reset: {g.prior_env_decided} under a '
+        "prior env</span>"
+        if g.prior_env_decided
+        else ""
+    )
     if g.earned:
-        return f'{_dot("ok")}<span class="ok">earned</span>'
+        return f'{_dot("ok")}<span class="ok">earned</span>{reset}'
     blocker = escape(g.blocker or "not earned")
-    return f'{_dot("mut")}<span class="mut">{blocker}</span>'
+    return f'{_dot("mut")}<span class="mut">{blocker}</span>{reset}'
 
 
 def _budget_cell(g: ClassGate) -> str:

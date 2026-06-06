@@ -63,6 +63,21 @@ def _review_interval() -> int:
         return _DEFAULT_REVIEW_INTERVAL
 
 
+def _environment() -> str:
+    """The current judgment-environment slug (the judge model), for the gate.
+
+    Trust is counted only under the current environment (§3.7); degrades to an
+    empty slug, which simply matches no stamped PR (the safe, reset side).
+    """
+    try:
+        from froot.config.settings import ModelSettings
+        from froot.policy.environment import environment_slug
+
+        return environment_slug(ModelSettings().ollama_model)
+    except Exception:  # never let a config read fail the page
+        return ""
+
+
 def _autonomy_policy() -> AutonomyPolicy:
     """The earned-autonomy thresholds, degrading to safe defaults.
 
@@ -107,6 +122,7 @@ async def build_html(client: Client) -> str:
         telemetry=telemetry_result,
         outcomes=outcomes,
         reliability_window_days=policy.window_days,
+        environment=_environment(),
     )
     return render.page(model)
 

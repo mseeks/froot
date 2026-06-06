@@ -189,6 +189,18 @@ def _pr_with_labels(labels: list[dict[str, str]] | None):
     )
 
 
+def test_to_pr_reads_environment_from_label():
+    pr = _pr_with_labels([{"name": "froot"}, {"name": "froot-env:gemma4-26b"}])
+    assert pr is not None
+    assert pr.env == "gemma4-26b"
+
+
+def test_to_pr_env_is_none_when_unstamped():
+    pr = _pr_with_labels([{"name": "froot"}, {"name": "dependency-patch"}])
+    assert pr is not None
+    assert pr.env is None
+
+
 def test_to_pr_reads_security_patch_loop_from_label():
     pr = _pr_with_labels([{"name": "froot"}, {"name": "security-patch"}])
     assert pr is not None

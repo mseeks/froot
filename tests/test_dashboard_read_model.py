@@ -28,6 +28,7 @@ def _pr(
     verdict: str | None = None,
     opened: datetime | None = None,
     merged: datetime | None = None,
+    env: str | None = None,
 ) -> GithubPr:
     return GithubPr(
         repo=REPO,
@@ -40,6 +41,7 @@ def _pr(
         state=state,
         opened_at=opened,
         merged_at=merged,
+        env=env,
     )
 
 
@@ -409,6 +411,7 @@ def _assemble_p(
     bumps: list[BumpExecution],
     policy: AutonomyPolicy,
     outcomes: dict[tuple[str, int], str] | None = None,
+    environment: str = "",
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
@@ -421,6 +424,7 @@ def _assemble_p(
         temporal=(((), tuple(bumps), (), ()), None),
         telemetry=_telemetry_off(),
         outcomes=outcomes,
+        environment=environment,
     )
 
 
@@ -534,6 +538,71 @@ def test_class_gate_reclaim_excludes_unverified_merges():
     g = model.class_gates[0]
     assert g.merged == 1
     assert g.reclaim_per_week == 0.0
+
+
+def test_class_gate_counts_only_current_environment():
+    # Two merges under the prior env (e4b) and three under the current (26b).
+    # Only the current-env merges count; the prior ones are reset but surfaced.
+    prior = [
+        _pr(
+            n,
+            f"old{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 10, tzinfo=UTC),
+            merged=datetime(2026, 5, 10, 0, 5, tzinfo=UTC),
+            env="gemma4-e4b",
+        )
+        for n in (1, 2)
+    ]
+    current = [
+        _pr(
+            n,
+            f"new{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 20, tzinfo=UTC),
+            merged=datetime(2026, 5, 20, 0, 5, tzinfo=UTC),
+            env="gemma4-26b",
+        )
+        for n in (3, 4, 5)
+    ]
+    held = {(REPO, n): "held" for n in (3, 4, 5)}
+    model = _assemble_p(
+        prior + current,
+        [],
+        _allow(),
+        outcomes=held,
+        environment="gemma4-26b",
+    )
+    g = model.class_gates[0]
+    assert g.decided == 3  # only the current-environment merges
+    assert g.prior_env_decided == 2  # the e4b record, reset but legible
+    assert g.earned is True  # 3 current, all held, 0 defects
+
+
+def test_class_gate_resets_when_only_prior_environment_history_exists():
+    # Everything was earned under e4b; the current env is 26b -> reset to zero.
+    prior = [
+        _pr(
+            n,
+            f"old{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 10, tzinfo=UTC),
+            merged=datetime(2026, 5, 10, 0, 5, tzinfo=UTC),
+            env="gemma4-e4b",
+        )
+        for n in (1, 2, 3, 4)
+    ]
+    held = {(REPO, n): "held" for n in (1, 2, 3, 4)}
+    model = _assemble_p(
+        prior, [], _allow(), outcomes=held, environment="gemma4-26b"
+    )
+    g = model.class_gates[0]
+    assert g.decided == 0
+    assert g.prior_env_decided == 4
+    assert g.earned is False
 
 
 # ── Adversarial canary probes (segregation) ──────────────────────────────────

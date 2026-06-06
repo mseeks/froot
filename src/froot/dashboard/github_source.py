@@ -23,6 +23,7 @@ import httpx
 from froot.config.settings import GitHubSettings
 from froot.domain.base import Frozen
 from froot.domain.loop import Loop
+from froot.policy.environment import env_from_labels
 
 _API: Final = "https://api.github.com"
 _API_VERSION: Final = "2022-11-28"
@@ -55,6 +56,9 @@ class GithubPr(Frozen):
     # dependency-patch so a PR with no loop label (or a hand-built test row)
     # attributes to the original loop rather than failing to construct.
     loop: str = "dependency-patch"
+    # The judgment environment (judge-model slug) the PR was opened under, from
+    # its ``froot-env:`` label; ``None`` if unstamped (a prior environment).
+    env: str | None = None
     package: str | None
     from_version: str | None
     to_version: str | None
@@ -64,18 +68,24 @@ class GithubPr(Frozen):
     merged_at: datetime | None
 
 
-def _loop_from_labels(payload: Any) -> str:
+def _label_names(payload: Any) -> set[str]:
+    """The set of label names on an issues-API row (empty if none/malformed)."""
+    labels = payload.get("labels")
+    if not isinstance(labels, list):
+        return set()
+    return {
+        name
+        for lbl in labels
+        if isinstance(lbl, dict) and isinstance((name := lbl.get("name")), str)
+    }
+
+
+def _loop_from_labels(names: set[str]) -> str:
     """The loop a PR belongs to, from its labels (defaults dependency-patch).
 
     Every froot PR carries its loop's label alongside the ``froot`` label, so
     the loop is durable on the PR even after its Temporal run ages out.
     """
-    labels = payload.get("labels")
-    names = (
-        {lbl.get("name") for lbl in labels if isinstance(lbl, dict)}
-        if isinstance(labels, list)
-        else set()
-    )
     for loop in Loop:
         if loop.value in names:
             return loop.value
@@ -150,11 +160,13 @@ def _to_pr(repo: str, payload: Any) -> GithubPr | None:
     parsed = parse_title(str(payload.get("title", "")))
     package, to_version = parsed if parsed is not None else (None, None)
     body = payload.get("body")
+    names = _label_names(payload)
     return GithubPr(
         repo=repo,
         number=int(payload["number"]),
         url=str(payload.get("html_url", "")),
-        loop=_loop_from_labels(payload),
+        loop=_loop_from_labels(names),
+        env=env_from_labels(names),
         package=package,
         from_version=parse_from_version(body),
         to_version=to_version,

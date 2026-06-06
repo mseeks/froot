@@ -118,7 +118,9 @@ async def test_green_bump_records_and_stays_open(
     assert outcome.pr.number == 7
     assert outcome.ci_passed
     # The PR is recorded (labeled) and left open for the human — never closed.
-    assert set(fake.labeled or ()) == {"froot", "dependency-patch"}
+    labeled = set(fake.labeled or ())
+    assert {"froot", "dependency-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)
     assert fake.closed == []
 
 
@@ -140,7 +142,9 @@ async def test_green_security_bump_records_with_security_labels(
     )
     outcome = await _run(loop=Loop.SECURITY_PATCH, candidate=candidate)
     assert outcome.ci_passed
-    assert set(fake.labeled or ()) == {"froot", "security-patch"}
+    labeled = set(fake.labeled or ())
+    assert {"froot", "security-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)
     assert fake.closed == []
 
 
@@ -169,7 +173,9 @@ async def test_red_bump_closes_pr_and_records(
     # Closed (with its branch deleted) AND recorded: the loop closed cleanly.
     assert fake.closed == [7]
     assert fake.deleted_branches == [make_pr(number=7).branch]
-    assert set(fake.labeled or ()) == {"froot", "dependency-patch"}
+    labeled = set(fake.labeled or ())
+    assert {"froot", "dependency-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)
 
 
 async def test_red_bump_stays_open_when_close_on_red_off(
@@ -181,4 +187,6 @@ async def test_red_bump_stays_open_when_close_on_red_off(
     assert isinstance(outcome.ci, CIFailed)
     # Toggle off: recorded but left open, nothing closed.
     assert fake.closed == []
-    assert set(fake.labeled or ()) == {"froot", "dependency-patch"}
+    labeled = set(fake.labeled or ())
+    assert {"froot", "dependency-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)

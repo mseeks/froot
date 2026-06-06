@@ -102,6 +102,9 @@ class BumpRow(Frozen):
     would_auto_merge: bool = False
     held_reason: str | None = None
     post_merge: str | None = None
+    # The judgment environment (judge-model slug) the PR was opened under, or
+    # ``None`` if unstamped; the gate counts only the current env (§3.7).
+    env: str | None = None
 
 
 class ClassGate(Frozen):
@@ -122,6 +125,9 @@ class ClassGate(Frozen):
         defects: Of those, how many broke the branch or were reverted.
         defect_rate: ``defects / determined``, or ``None`` if none determined —
             the second, independent bearing the gate triangulates against.
+        prior_env_decided: Decided PRs in the window earned under a *different*
+            (or no) environment — they no longer count, so this figure makes a
+            model-change reset legible rather than a mysterious drop to zero.
         earned: Whether the class has earned its gate move under the policy.
         blocker: Why it has not, if it has not (else ``None``).
         approvals_per_week: The steward approvals this class costs now
@@ -140,6 +146,7 @@ class ClassGate(Frozen):
     determined: int
     defects: int
     defect_rate: float | None
+    prior_env_decided: int
     earned: bool
     blocker: str | None
     approvals_per_week: float

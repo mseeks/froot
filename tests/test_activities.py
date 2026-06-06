@@ -246,8 +246,11 @@ async def test_record_outcome_sets_labels(monkeypatch: pytest.MonkeyPatch):
         RecordInput(target=make_repo(), outcome=outcome)
     )
     assert fake.labeled is not None
-    # Exactly the fixed pair — no changelog/CI labels, regardless of outcome.
-    assert set(fake.labeled) == {"froot", "dependency-patch"}
+    labeled = set(fake.labeled)
+    # The loop labels (no changelog/CI labels, regardless of outcome) plus the
+    # environment stamp the gate uses to scope trust to the current judge model.
+    assert {"froot", "dependency-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)
 
 
 class _FakeClient:
