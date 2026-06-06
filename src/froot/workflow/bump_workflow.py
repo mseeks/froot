@@ -49,6 +49,7 @@ with workflow.unsafe.imports_passed_through():
         BumpParams,
         CiCheckInput,
         CloseInput,
+        JudgeInput,
         OpenPrInput,
         RecordInput,
     )
@@ -56,6 +57,7 @@ with workflow.unsafe.imports_passed_through():
 if TYPE_CHECKING:
     # Used only in the (non-workflow-decorated) helper signatures, so these are
     # type-only — unlike the run() signature, Temporal does not evaluate them.
+    from froot.domain.loop import Loop
     from froot.domain.pull_request import PullRequestRef
     from froot.domain.repo import TargetRepo
 
@@ -76,7 +78,9 @@ class BumpWorkflow:
                     "effects)",
                     non_retryable=True,
                 )
-            event = await self._execute(params.target, transition.effects[0])
+            event = await self._execute(
+                params.target, params.loop, transition.effects[0]
+            )
             transition = advance(state, event, close_on_red=params.close_on_red)
             if transition.kind is TransitionKind.REJECTED:
                 raise ApplicationError(
@@ -91,13 +95,20 @@ class BumpWorkflow:
             )
         return final.outcome
 
-    async def _execute(self, target: TargetRepo, effect: Effect) -> LoopEvent:
-        """Interpret one effect into an activity (or a durable CI wait)."""
+    async def _execute(
+        self, target: TargetRepo, loop: Loop, effect: Effect
+    ) -> LoopEvent:
+        """Interpret one effect into an activity (or a durable CI wait).
+
+        ``loop`` rides in from the workflow's params and is handed to the impure
+        activities (the branch namespace, the labels, the judge's prompt) — so
+        the pure state machine never learns which loop it is running.
+        """
         match effect:
             case JudgeChangelog():
                 verdict = await workflow.execute_activity(
                     activities.judge_changelog,
-                    effect.candidate,
+                    JudgeInput(candidate=effect.candidate, loop=loop),
                     start_to_close_timeout=ACTIVITY_TIMEOUT,
                     retry_policy=TOOL_RETRY,
                 )
@@ -109,6 +120,7 @@ class BumpWorkflow:
                         target=target,
                         candidate=effect.candidate,
                         verdict=effect.verdict,
+                        loop=loop,
                     ),
                     start_to_close_timeout=ACTIVITY_TIMEOUT,
                     retry_policy=TOOL_RETRY,
@@ -124,6 +136,7 @@ class BumpWorkflow:
                         target=target,
                         pr=effect.pr,
                         failing=effect.failing,
+                        loop=loop,
                     ),
                     start_to_close_timeout=CI_CHECK_TIMEOUT,
                     retry_policy=TOOL_RETRY,
@@ -132,7 +145,9 @@ class BumpWorkflow:
             case RecordOutcome():
                 await workflow.execute_activity(
                     activities.record_outcome,
-                    RecordInput(target=target, outcome=effect.outcome),
+                    RecordInput(
+                        target=target, outcome=effect.outcome, loop=loop
+                    ),
                     start_to_close_timeout=CI_CHECK_TIMEOUT,
                     retry_policy=TOOL_RETRY,
                 )

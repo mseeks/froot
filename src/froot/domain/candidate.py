@@ -1,10 +1,13 @@
-"""A patch candidate: a dependency with a clean patch-level upgrade available.
+"""A candidate: a single dependency bump a loop wants to propose.
 
-This is the loop's bounded unit of work. Its single, load-bearing invariant —
-the target *is* a patch bump of the current version — is enforced at
-construction, so the rest of the system can treat any :class:`PatchCandidate` it
-holds as already-validated. A candidate that changes the major or minor, goes
-backward, or steps onto a prerelease simply cannot be built.
+The loop's bounded unit of work, shared by every loop. The type enforces only
+what is true for *any* loop — the target is a stable release strictly newer than
+the installed version, so a candidate can never go backward or step onto a
+prerelease. *How much* of a bump is allowed (patch-only for dependency-patch, or
+whatever clears an advisory for security-patch) is the selecting policy's call,
+not the type's — see :mod:`froot.policy.candidates`. The optional
+``justification`` carries a loop's "why" (e.g. the advisories a security bump
+clears) to the PR body and the judge, without any other loop having to care.
 """
 
 from __future__ import annotations
@@ -18,29 +21,38 @@ from froot.domain.ecosystem import Ecosystem
 from froot.domain.version import Version
 
 
-class PatchCandidate(Frozen):
-    """A proposed patch-level upgrade of a single dependency.
+class Candidate(Frozen):
+    """A proposed upgrade of a single dependency.
 
     Attributes:
         package: The dependency's name (e.g. ``"left-pad"`` or a scoped
             ``"@scope/pkg"``).
         ecosystem: The package manager the dependency belongs to.
         current: The installed version.
-        target: The proposed version — guaranteed a clean patch bump of
-            ``current`` (see :meth:`Version.is_patch_bump_of`).
+        target: The proposed version — a stable release strictly newer than
+            ``current`` (the loop's policy decides how far it may reach).
+        justification: An optional short "why" for loops that need one (e.g.
+            ``"clears GHSA-… (CVE-…)"``); ``None`` when the bump speaks for
+            itself, as a patch does.
     """
 
     package: str = Field(min_length=1)
     ecosystem: Ecosystem
     current: Version
     target: Version
+    justification: str | None = None
 
     @model_validator(mode="after")
-    def _require_patch_bump(self) -> Self:
-        """Reject any candidate whose target is not a clean patch bump."""
-        if not self.target.is_patch_bump_of(self.current):
+    def _require_forward_stable(self) -> Self:
+        """Reject a target that is not a stable release newer than current."""
+        if not self.target.is_stable:
             raise ValueError(
-                f"{self.target} is not a clean patch bump of {self.current} "
+                f"{self.target} is a prerelease; not a candidate target "
+                f"for {self.package!r}"
+            )
+        if not self.target > self.current:
+            raise ValueError(
+                f"{self.target} is not newer than {self.current} "
                 f"for {self.package!r}"
             )
         return self
@@ -50,12 +62,32 @@ class PatchCandidate(Frozen):
         return f"{self.package} {self.current} -> {self.target}"
 
 
+class InstalledPackage(Frozen):
+    """A direct dependency and the version currently locked for it.
+
+    The raw material the security-patch signal works from: froot can only bump a
+    *direct* dependency (a transitive vuln needs its parent moved), so this is
+    the set the package-manager adapter reads from the lockfile, and what OSV is
+    asked about. Versions that don't parse as a :class:`Version` are dropped by
+    the adapter before they get here (conservative, same as the patch loop).
+
+    Attributes:
+        package: The dependency's name.
+        ecosystem: The package manager it belongs to.
+        version: The installed (locked) version.
+    """
+
+    package: str = Field(min_length=1)
+    ecosystem: Ecosystem
+    version: Version
+
+
 class AvailableUpgrade(Frozen):
     """An installed dependency and the published versions it could move to.
 
     The raw material the package-manager adapter reports (e.g. from ``npm
     outdated`` + the published version list). It is deliberately *not* yet a
-    :class:`PatchCandidate`: choosing which available version is the right
+    :class:`Candidate`: choosing which available version is the right
     patch-level target is business logic, and it lives in the pure
     :func:`froot.policy.candidates.select_patch_candidates`, not in the adapter.
 

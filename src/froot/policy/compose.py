@@ -18,22 +18,29 @@ from froot.domain.ecosystem import (
     lockfile_filename,
     manifest_filename,
 )
+from froot.domain.loop import Loop
 from froot.domain.pull_request import PullRequestDraft
 from froot.policy.naming import branch_name
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import PatchCandidate
+    from froot.domain.candidate import Candidate
     from froot.domain.changelog import ChangelogVerdict
     from froot.domain.repo import TargetRepo
 
 _LABEL_NAMESPACE = "froot"
 
-# The fixed labels froot puts on every PR it opens. Deliberately just these two:
-# they mark the PR as froot's dependency-patch work, nothing more. How the
-# proposal fared (the changelog verdict, the CI result) is recorded durably in
-# the workflow history, not layered onto the PR as labels that pile up across
-# re-runs.
-PR_LABELS: tuple[str, str] = (_LABEL_NAMESPACE, "dependency-patch")
+
+def pr_labels(loop: Loop = Loop.DEPENDENCY_PATCH) -> tuple[str, str]:
+    """The fixed labels for a loop's PRs: ``(froot, <loop>)``.
+
+    Deliberately just these two — they mark the PR as froot's work for *this*
+    loop, and nothing more. How the proposal fared (the changelog verdict, the
+    CI result) is recorded durably in the workflow history, not layered onto the
+    PR as labels that pile up across re-runs. The loop label also keeps the two
+    loops' PRs distinguishable to a human filtering the repo.
+    """
+    return (_LABEL_NAMESPACE, loop.value)
+
 
 # Tags the comment froot leaves when it closes one of its own PRs (red CI, or a
 # reconcile sweep). The marker lets the close go through the idempotent
@@ -75,10 +82,21 @@ def _verdict_summary(verdict: ChangelogVerdict) -> str:
     assert_never(verdict)
 
 
+def _title_prefix(loop: Loop) -> str:
+    """The PR-title verb for a loop (``deps`` / ``security``)."""
+    match loop:
+        case Loop.DEPENDENCY_PATCH:
+            return "deps"
+        case Loop.SECURITY_PATCH:
+            return "security"
+    assert_never(loop)
+
+
 def pull_request_draft(
     target: TargetRepo,
-    candidate: PatchCandidate,
+    candidate: Candidate,
     verdict: ChangelogVerdict,
+    loop: Loop = Loop.DEPENDENCY_PATCH,
 ) -> PullRequestDraft:
     """Build the deterministic PR content for a bump (no model call).
 
@@ -86,26 +104,33 @@ def pull_request_draft(
         target: The repo the PR is opened against (gives the base branch).
         candidate: The bump being proposed.
         verdict: The model's changelog framing, surfaced for the reviewer.
+        loop: Which loop is proposing — sets the branch namespace and the title
+            verb, and (via ``candidate.justification``) the body's "why".
 
     Returns:
         A :class:`PullRequestDraft` ready for the forge to open.
     """
-    body = "\n".join(
-        (
-            f"Bumps `{candidate.package}` from {candidate.current} to "
-            f"{candidate.target} ({_changed_files(candidate.ecosystem)}).",
-            "",
-            _verdict_summary(verdict),
-            "",
-            "---",
-            "Opened by froot. froot does not merge; a human approves.",
-        )
-    )
+    lines = [
+        f"Bumps `{candidate.package}` from {candidate.current} to "
+        f"{candidate.target} ({_changed_files(candidate.ecosystem)}).",
+    ]
+    if candidate.justification is not None:
+        lines += ["", candidate.justification]
+    lines += [
+        "",
+        _verdict_summary(verdict),
+        "",
+        "---",
+        "Opened by froot. froot does not merge; a human approves.",
+    ]
     return PullRequestDraft(
-        branch=branch_name(candidate),
+        branch=branch_name(candidate, loop),
         base=target.default_branch,
-        title=f"deps: bump {candidate.package} to {candidate.target}",
-        body=body,
+        title=(
+            f"{_title_prefix(loop)}: bump {candidate.package} "
+            f"to {candidate.target}"
+        ),
+        body="\n".join(lines),
     )
 
 

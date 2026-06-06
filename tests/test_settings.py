@@ -46,6 +46,34 @@ def test_parses_repo_slugs(monkeypatch: pytest.MonkeyPatch):
     assert settings.scan_interval_seconds == 3600
 
 
+def test_loops_default_to_dependency_patch_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from froot.domain.loop import Loop
+
+    monkeypatch.setenv("FROOT_REPOS", "acme/widgets")
+    monkeypatch.delenv("FROOT_LOOPS", raising=False)
+    assert Settings().loops == (Loop.DEPENDENCY_PATCH,)
+
+
+def test_parses_loops_list(monkeypatch: pytest.MonkeyPatch):
+    from froot.domain.loop import Loop
+
+    monkeypatch.setenv("FROOT_REPOS", "acme/widgets")
+    monkeypatch.setenv("FROOT_LOOPS", "dependency-patch, security-patch")
+    assert Settings().loops == (
+        Loop.DEPENDENCY_PATCH,
+        Loop.SECURITY_PATCH,
+    )
+
+
+def test_unknown_loop_rejected(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_REPOS", "acme/widgets")
+    monkeypatch.setenv("FROOT_LOOPS", "bogus-loop")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_parses_ecosystem_suffix(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FROOT_REPOS", "acme/widgets, acme/pylib@uv")
     repos = Settings().repos

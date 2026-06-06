@@ -48,7 +48,7 @@ from froot.domain.state import (
 )
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import PatchCandidate
+    from froot.domain.candidate import Candidate
 
 
 class TransitionKind(StrEnum):
@@ -86,7 +86,7 @@ def _rejected(state: BumpState, reason: str) -> Transition:
     return Transition(kind=TransitionKind.REJECTED, next=state, reason=reason)
 
 
-def start(candidate: PatchCandidate) -> Transition:
+def start(candidate: Candidate) -> Transition:
     """The opening transition: enter ``Discovered`` and judge the changelog."""
     return _advanced(
         Discovered(candidate=candidate),

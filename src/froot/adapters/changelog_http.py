@@ -29,7 +29,7 @@ from froot.domain.repo import RepoRef
 from froot.result import Ok
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import PatchCandidate
+    from froot.domain.candidate import Candidate
 
 _REGISTRY = "https://registry.npmjs.org"
 _PYPI_JSON = "https://pypi.org/pypi"
@@ -116,7 +116,7 @@ def github_repo_from_pypi(metadata: Any) -> RepoRef | None:
 class HttpChangelogSource:
     """A :class:`~froot.ports.protocols.ChangelogSource` over HTTP."""
 
-    async def fetch(self, candidate: PatchCandidate) -> Changelog | None:
+    async def fetch(self, candidate: Candidate) -> Changelog | None:
         """Fetch the target version's changelog, or ``None`` (best-effort)."""
         try:
             async with httpx.AsyncClient(
@@ -129,7 +129,7 @@ class HttpChangelogSource:
             return None
 
     async def _fetch(
-        self, client: httpx.AsyncClient, candidate: PatchCandidate
+        self, client: httpx.AsyncClient, candidate: Candidate
     ) -> Changelog | None:
         repo = await self._discover_repo(client, candidate)
         if repo is None:
@@ -147,7 +147,7 @@ class HttpChangelogSource:
 
     @staticmethod
     async def _discover_repo(
-        client: httpx.AsyncClient, candidate: PatchCandidate
+        client: httpx.AsyncClient, candidate: Candidate
     ) -> RepoRef | None:
         """Find the package's GitHub repo from its registry metadata."""
         match candidate.ecosystem:

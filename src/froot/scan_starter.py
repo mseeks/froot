@@ -36,26 +36,31 @@ async def _start() -> None:
         data_converter=pydantic_data_converter,
     )
     queue = temporal.task_queue
-    for target in settings.repos:
-        workflow_id = scan_workflow_id(target)
-        params = ScanParams(
-            target=target,
-            interval_seconds=settings.scan_interval_seconds,
-            continuous=True,
-        )
-        try:
-            handle = await client.start_workflow(
-                ScanWorkflow.run,
-                params,
-                id=workflow_id,
-                task_queue=queue,
-                id_reuse_policy=(
-                    WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
-                ),
+    for loop in settings.loops:
+        for target in settings.repos:
+            workflow_id = scan_workflow_id(target, loop)
+            params = ScanParams(
+                target=target,
+                interval_seconds=settings.scan_interval_seconds,
+                continuous=True,
+                loop=loop,
             )
-            print(f"started scan loop {handle.id!r} for {target.repo.slug}")
-        except WorkflowAlreadyStartedError:
-            print(f"scan loop {workflow_id!r} already running — left untouched")
+            try:
+                handle = await client.start_workflow(
+                    ScanWorkflow.run,
+                    params,
+                    id=workflow_id,
+                    task_queue=queue,
+                    id_reuse_policy=(
+                        WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
+                    ),
+                )
+                print(
+                    f"started {loop.value} scan loop {handle.id!r} "
+                    f"for {target.repo.slug}"
+                )
+            except WorkflowAlreadyStartedError:
+                print(f"scan loop {workflow_id!r} already running — untouched")
 
 
 def main() -> None:

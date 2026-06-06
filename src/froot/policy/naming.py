@@ -12,13 +12,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from froot.domain.loop import Loop
 from froot.domain.pull_request import BranchName
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import PatchCandidate
+    from froot.domain.candidate import Candidate
     from froot.domain.repo import TargetRepo
 
-_BRANCH_PREFIX = "froot/dependency-patch"
 # Anything outside the safe set collapses to a single hyphen.
 _UNSAFE = re.compile(r"[^a-z0-9._-]+")
 
@@ -28,29 +28,51 @@ def _slug(text: str) -> str:
     return _UNSAFE.sub("-", text.lower()).strip("-")
 
 
-def branch_name(candidate: PatchCandidate) -> BranchName:
-    """The deterministic head branch for a bump (also the PR dedup key)."""
+def _loop_id_segment(loop: Loop) -> tuple[str, ...]:
+    """The workflow-id segment that namespaces a loop.
+
+    Empty for ``dependency-patch`` so its ids stay byte-for-byte what they were
+    before a second loop existed — the running cluster loop is not orphaned on
+    deploy. Every other loop carries its name as a segment.
+    """
+    return () if loop is Loop.DEPENDENCY_PATCH else (loop.value,)
+
+
+def branch_name(
+    candidate: Candidate, loop: Loop = Loop.DEPENDENCY_PATCH
+) -> BranchName:
+    """The deterministic head branch for a bump (also the PR dedup key).
+
+    Namespaced by loop (``froot/<loop>/…``) so two loops never push the same
+    branch even when they target the same package and version.
+    """
     return BranchName(
-        value=f"{_BRANCH_PREFIX}/{_slug(candidate.package)}-{candidate.target}"
+        value=f"froot/{loop.value}/{_slug(candidate.package)}-{candidate.target}"
     )
 
 
-def branch_package_prefix(package: str) -> str:
-    """The branch-name prefix shared by every bump of ``package``.
+def branch_package_prefix(
+    package: str, loop: Loop = Loop.DEPENDENCY_PATCH
+) -> str:
+    """The branch prefix shared by all of this loop's bumps of ``package``.
 
-    ``branch_name`` appends ``-<target>`` to this, so an open PR belongs to
-    ``package`` iff its branch starts with this prefix *and* the remainder
+    ``branch_name`` appends ``-<target>`` to this, so an open PR belongs to this
+    loop's ``package`` iff its branch starts with this prefix *and* the rest
     parses as a version (reconcile relies on that version-parse to tell apart
-    packages whose slugs prefix one another — ``foo`` vs ``foo-bar``).
+    packages whose slugs prefix one another — ``foo`` vs ``foo-bar``). The loop
+    in the prefix scopes reconcile to its own PRs.
     """
-    return f"{_BRANCH_PREFIX}/{_slug(package)}-"
+    return f"froot/{loop.value}/{_slug(package)}-"
 
 
-def bump_workflow_id(repo: TargetRepo, candidate: PatchCandidate) -> str:
+def bump_workflow_id(
+    repo: TargetRepo, candidate: Candidate, loop: Loop = Loop.DEPENDENCY_PATCH
+) -> str:
     """The deterministic per-bump workflow id (the dispatch dedup key)."""
     return "-".join(
         (
             "froot-bump",
+            *_loop_id_segment(loop),
             _slug(repo.repo.owner),
             _slug(repo.repo.name),
             _slug(candidate.package),
@@ -59,10 +81,17 @@ def bump_workflow_id(repo: TargetRepo, candidate: PatchCandidate) -> str:
     )
 
 
-def scan_workflow_id(repo: TargetRepo) -> str:
+def scan_workflow_id(
+    repo: TargetRepo, loop: Loop = Loop.DEPENDENCY_PATCH
+) -> str:
     """The deterministic per-repo scan-loop workflow id (a singleton)."""
     return "-".join(
-        ("froot-scan", _slug(repo.repo.owner), _slug(repo.repo.name))
+        (
+            "froot-scan",
+            *_loop_id_segment(loop),
+            _slug(repo.repo.owner),
+            _slug(repo.repo.name),
+        )
     )
 
 

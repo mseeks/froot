@@ -1,6 +1,7 @@
 """All deployment config, as pydantic-settings models (env or ``.env``), frozen.
 
-* :class:`Settings` (``FROOT_*``) — loop config: repositories and scan interval.
+* :class:`Settings` (``FROOT_*``) — loop config: repositories, scan interval,
+  and which maintenance loops (``FROOT_LOOPS``) to run on them.
 * :class:`TemporalSettings` (``TEMPORAL_*``) — connection: host / namespace /
   task queue, shared by the worker, the scan starter, and the activity client.
 * :class:`GitHubSettings` — the API token (``FROOT_GITHUB_TOKEN``) as a
@@ -24,6 +25,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from froot.domain.ecosystem import Ecosystem
+from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.result import Ok
 
@@ -44,6 +46,29 @@ class Settings(BaseSettings):
     scan_interval_seconds: int = Field(
         default=_DEFAULT_SCAN_INTERVAL_SECONDS, gt=0
     )
+    # Which maintenance loops to run on each repo. ``FROOT_LOOPS`` is a
+    # comma-separated list of loop names; it defaults to dependency-patch alone,
+    # so an existing deployment keeps running exactly the loop it did before.
+    loops: Annotated[tuple[Loop, ...], NoDecode] = Field(
+        default=(Loop.DEPENDENCY_PATCH,), min_length=1
+    )
+
+    @field_validator("loops", mode="before")
+    @classmethod
+    def _parse_loops(cls, value: object) -> object:
+        """Parse ``FROOT_LOOPS`` as a comma-separated loop-name list."""
+        if not isinstance(value, str):
+            return value
+        loops: list[Loop] = []
+        for raw in value.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            try:
+                loops.append(Loop(entry))
+            except ValueError:
+                raise ValueError(f"unknown loop: {entry!r}") from None
+        return tuple(loops)
 
     @field_validator("repos", mode="before")
     @classmethod

@@ -13,7 +13,22 @@ from froot.adapters.uv import (
     parse_locked_versions,
 )
 from froot.domain.ecosystem import Ecosystem
-from tests.support import ver
+from tests.support import make_repo, ver
+
+
+async def test_list_installed_reads_direct_deps_and_locked_versions(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["Jinja2>=2.10"]\n'
+    )
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\n[[package]]\nname = "jinja2"\nversion = "2.10.0"\n'
+    )
+    installed = await UvPackageManager().list_installed(
+        make_repo(ecosystem=Ecosystem.UV), tmp_path
+    )
+    assert {p.package: str(p.version) for p in installed} == {
+        "jinja2": "2.10.0"
+    }
 
 
 def test_normalize_name_pep503():

@@ -14,9 +14,15 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from froot.domain.candidate import AvailableUpgrade, PatchCandidate
+    from froot.domain.advisory import Advisory
+    from froot.domain.candidate import (
+        AvailableUpgrade,
+        Candidate,
+        InstalledPackage,
+    )
     from froot.domain.changelog import Changelog, ChangelogVerdict
     from froot.domain.ci import CIStatus
+    from froot.domain.loop import Loop
     from froot.domain.pull_request import (
         BranchName,
         PullRequestDraft,
@@ -26,7 +32,7 @@ if TYPE_CHECKING:
 
 
 class PackageManager(Protocol):
-    """Reads available upgrades and regenerates the manifest + lockfile.
+    """Reads dependency facts and regenerates the manifest + lockfile.
 
     The adapter carries the package manager (e.g. ``npm``) but never runs the
     project's tests or install scripts — lockfile regeneration only, so the
@@ -39,13 +45,38 @@ class PackageManager(Protocol):
         """Report each outdated dependency and the versions available to it."""
         ...
 
+    async def list_installed(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[InstalledPackage, ...]:
+        """Report the direct dependencies and their locked versions.
+
+        The security signal's input: every *direct* dependency (froot can only
+        bump those) at the version the lockfile pins, regardless of whether a
+        newer one exists. Read from the lockfile only — no install.
+        """
+        ...
+
     async def apply_patch_bump(
-        self, candidate: PatchCandidate, workspace: Path
+        self, candidate: Candidate, workspace: Path
     ) -> None:
         """Rewrite the manifest + lockfile in ``workspace`` to the target.
 
         Lockfile-only and with install scripts disabled: it resolves and
         writes the dependency tree but runs no project or dependency code.
+        """
+        ...
+
+
+class AdvisorySource(Protocol):
+    """Looks up known security advisories for a set of installed packages."""
+
+    async def advisories(
+        self, installed: tuple[InstalledPackage, ...]
+    ) -> tuple[Advisory, ...]:
+        """Return the advisories affecting any of ``installed`` (one per vuln).
+
+        Best-effort: a lookup that fails for a package yields no advisories for
+        it rather than raising, so a flaky source never blocks the loop.
         """
         ...
 
@@ -147,14 +178,16 @@ class Forge(Protocol):
 class ChangelogSource(Protocol):
     """Best-effort fetch of a target version's changelog / release notes."""
 
-    async def fetch(self, candidate: PatchCandidate) -> Changelog | None:
+    async def fetch(self, candidate: Candidate) -> Changelog | None:
         """Return the changelog for the candidate's target, or ``None``."""
         ...
 
 
 class ModelJudge(Protocol):
-    """The thin model judgment: is this changelog a clean patch?"""
+    """The thin model judgment: how risky is this bump's changelog?"""
 
-    async def judge(self, changelog: Changelog) -> ChangelogVerdict:
-        """Assess a changelog and return a typed verdict."""
+    async def judge(
+        self, changelog: Changelog, loop: Loop = ...
+    ) -> ChangelogVerdict:
+        """Assess a changelog into a verdict, framed by the loop."""
         ...

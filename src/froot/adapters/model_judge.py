@@ -1,12 +1,13 @@
-"""The thin model judgment: is this changelog a clean patch?
+"""The thin model judgment: how risky is this dependency bump's changelog?
 
 froot's one model call. A Pydantic AI agent reads the changelog and returns a
 typed :class:`_Assessment`, which :func:`assessment_to_verdict` maps to the
 domain :data:`~froot.domain.changelog.ChangelogVerdict`. The verdict is framing,
 not a gate — the spine proposes the bump regardless — so even a "risky" reading
-just shapes the PR. The model is injected, so tests run it offline with a
-``TestModel`` / ``FunctionModel``; the mapping is a pure function, tested apart
-from any model.
+just shapes the PR. The *loop* shapes what the model is asked: a patch bump asks
+"is this clean?", a security bump (often a minor/major) asks "what breaks?". The
+model is injected, so tests run it offline with a ``TestModel`` /
+``FunctionModel``; the mapping is a pure function, tested apart from any model.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from froot.domain.changelog import (
     RiskyVerdict,
     UnknownVerdict,
 )
+from froot.domain.loop import Loop
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
@@ -29,9 +31,9 @@ if TYPE_CHECKING:
     from froot.domain.changelog import Changelog, ChangelogVerdict
 
 _SYSTEM_PROMPT = (
-    "You assess the changelog of a dependency's PATCH-level upgrade for a "
-    "code-maintenance bot. The bot proposes the bump either way; your job is "
-    "only to frame the risk for the human reviewer.\n"
+    "You assess the changelog of a dependency upgrade for a code-maintenance "
+    "bot. The bot proposes the bump either way; your job is only to frame the "
+    "risk for the human reviewer.\n"
     "Return one verdict:\n"
     "- clean: the notes describe only fixes / docs / internal changes with no "
     "behavioral or API impact.\n"
@@ -41,6 +43,23 @@ _SYSTEM_PROMPT = (
     "Quote-or-omit: base 'risky' concerns on what the text actually says; do "
     "not speculate. Keep the rationale to one or two sentences."
 )
+
+
+def _loop_context(loop: Loop) -> str:
+    """The one line that tells the model what kind of bump it is judging."""
+    match loop:
+        case Loop.DEPENDENCY_PATCH:
+            return (
+                "This is a patch-level upgrade; weigh whether the notes hide "
+                "any behavioral change behind a 'patch'."
+            )
+        case Loop.SECURITY_PATCH:
+            return (
+                "This is a SECURITY upgrade that may cross a minor or major "
+                "line to clear a vulnerability; weigh breaking changes the "
+                "human should know before merging — the fix is still worth it."
+            )
+    assert_never(loop)
 
 
 class _Assessment(BaseModel):
@@ -77,9 +96,12 @@ class PydanticAiJudge:
             system_prompt=_SYSTEM_PROMPT,
         )
 
-    async def judge(self, changelog: Changelog) -> ChangelogVerdict:
-        """Assess a changelog and return a typed verdict."""
+    async def judge(
+        self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
+    ) -> ChangelogVerdict:
+        """Assess a changelog into a verdict, framed by the loop."""
         prompt = (
+            f"{_loop_context(loop)}\n"
             f"Package: {changelog.package}\n"
             f"Target version: {changelog.version}\n"
             f"Changelog:\n{changelog.text}"

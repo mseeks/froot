@@ -24,7 +24,13 @@ with workflow.unsafe.imports_passed_through():
         DISPATCH_TIMEOUT,
         TOOL_RETRY,
     )
-    from froot.workflow.types import DispatchInput, ScanParams, ScanResult
+    from froot.workflow.types import (
+        DispatchInput,
+        ReconcileInput,
+        ScanCandidatesInput,
+        ScanParams,
+        ScanResult,
+    )
 
 
 @workflow.defn
@@ -36,22 +42,26 @@ class ScanWorkflow:
         """Scan, dispatch each, reconcile stale PRs, then loop or return."""
         candidates = await workflow.execute_activity(
             activities.scan_candidates,
-            params.target,
+            ScanCandidatesInput(target=params.target, loop=params.loop),
             start_to_close_timeout=ACTIVITY_TIMEOUT,
             retry_policy=TOOL_RETRY,
         )
         for candidate in candidates:
             await workflow.execute_activity(
                 activities.dispatch_bump,
-                DispatchInput(target=params.target, candidate=candidate),
+                DispatchInput(
+                    target=params.target,
+                    candidate=candidate,
+                    loop=params.loop,
+                ),
                 start_to_close_timeout=DISPATCH_TIMEOUT,
                 retry_policy=TOOL_RETRY,
             )
-        # Close froot PRs a newer patch superseded or the base already
-        # satisfied — re-derived from the repo each tick, same as the scan.
+        # Close this loop's PRs a newer target superseded — re-derived from the
+        # repo each tick, same as the scan, and scoped to the loop's namespace.
         reconciled = await workflow.execute_activity(
             activities.reconcile_open_prs,
-            params.target,
+            ReconcileInput(target=params.target, loop=params.loop),
             start_to_close_timeout=ACTIVITY_TIMEOUT,
             retry_policy=TOOL_RETRY,
         )
@@ -70,5 +80,6 @@ class ScanWorkflow:
                 target=params.target,
                 interval_seconds=params.interval_seconds,
                 continuous=True,
+                loop=params.loop,
             )
         )

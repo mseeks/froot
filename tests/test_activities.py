@@ -7,12 +7,14 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 import froot.adapters.changelog_http as changelog_mod
 import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
+import froot.adapters.osv as osv_mod
 import froot.adapters.registry as registry_mod
 import froot.workflow.temporal_client as temporal_client
 from froot.domain.candidate import AvailableUpgrade
 from froot.domain.changelog import Changelog, CleanVerdict, UnknownVerdict
 from froot.domain.ci import CIPassed
 from froot.domain.ecosystem import Ecosystem
+from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
 from froot.policy.naming import bump_workflow_id
 from froot.workflow import activities
@@ -21,15 +23,21 @@ from froot.workflow.types import (
     CiCheckInput,
     CloseInput,
     DispatchInput,
+    JudgeInput,
     OpenPrInput,
+    ReconcileInput,
     RecordInput,
+    ScanCandidatesInput,
 )
 from tests.support import (
+    FakeAdvisorySource,
     FakeChangelogSource,
     FakeForge,
     FakeJudge,
     FakePackageManager,
+    make_advisory,
     make_candidate,
+    make_installed,
     make_pr,
     make_repo,
     make_upgrade,
@@ -54,8 +62,35 @@ async def test_scan_candidates_selects_patches(
         "package_manager_for",
         lambda ecosystem: FakePackageManager(upgrades),
     )
-    result = await activities.scan_candidates(make_repo())
+    result = await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo())
+    )
     assert [candidate.target for candidate in result] == [ver("1.4.3")]
+
+
+async def test_scan_candidates_security_loop(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The security arm: installed set -> OSV advisories -> clearing targets.
+    installed = (make_installed("left-pad", "1.4.2"),)
+    advisories = (
+        make_advisory("left-pad", "GHSA-1", ranges=(("0", "1.4.3"),)),
+    )
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(installed=installed),
+    )
+    monkeypatch.setattr(
+        osv_mod, "OsvAdvisorySource", lambda: FakeAdvisorySource(advisories)
+    )
+    result = await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo(), loop=Loop.SECURITY_PATCH)
+    )
+    assert [candidate.target for candidate in result] == [ver("1.4.3")]
+    assert result[0].justification is not None
+    assert "GHSA-1" in result[0].justification
 
 
 async def test_scan_candidates_selects_package_manager_by_ecosystem(
@@ -69,7 +104,9 @@ async def test_scan_candidates_selects_package_manager_by_ecosystem(
 
     monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
     monkeypatch.setattr(registry_mod, "package_manager_for", factory)
-    await activities.scan_candidates(make_repo(ecosystem=Ecosystem.UV))
+    await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo(ecosystem=Ecosystem.UV))
+    )
     assert seen["ecosystem"] is Ecosystem.UV
 
 
@@ -79,7 +116,9 @@ async def test_judge_changelog_unknown_when_missing(
     monkeypatch.setattr(
         changelog_mod, "HttpChangelogSource", lambda: FakeChangelogSource(None)
     )
-    verdict = await activities.judge_changelog(make_candidate())
+    verdict = await activities.judge_changelog(
+        JudgeInput(candidate=make_candidate())
+    )
     assert isinstance(verdict, UnknownVerdict)
 
 
@@ -97,7 +136,9 @@ async def test_judge_changelog_uses_model(monkeypatch: pytest.MonkeyPatch):
         "PydanticAiJudge",
         lambda: FakeJudge(CleanVerdict(rationale="clean")),
     )
-    verdict = await activities.judge_changelog(make_candidate())
+    verdict = await activities.judge_changelog(
+        JudgeInput(candidate=make_candidate())
+    )
     assert isinstance(verdict, CleanVerdict)
 
 
@@ -267,7 +308,9 @@ async def test_reconcile_open_prs_closes_superseded(
         "package_manager_for",
         lambda ecosystem: FakePackageManager(upgrades),
     )
-    closed = await activities.reconcile_open_prs(make_repo())
+    closed = await activities.reconcile_open_prs(
+        ReconcileInput(target=make_repo())
+    )
     assert closed == 1
     assert fake.closed == [5]
     assert fake.deleted_branches == [stale.branch]
@@ -279,7 +322,9 @@ async def test_reconcile_open_prs_noop_when_disabled(
     monkeypatch.setenv("FROOT_RECONCILE", "0")
     fake = FakeForge(open_prs=(make_pr(),))
     monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
-    closed = await activities.reconcile_open_prs(make_repo())
+    closed = await activities.reconcile_open_prs(
+        ReconcileInput(target=make_repo())
+    )
     assert closed == 0
     assert fake.closed == []
 
@@ -297,12 +342,64 @@ async def test_judge_changelog_degrades_to_unknown_on_model_error(
     )
 
     class _BoomJudge:
-        async def judge(self, changelog: Changelog) -> object:
+        async def judge(
+            self, changelog: Changelog, loop: object = None
+        ) -> object:
             raise RuntimeError("ollama unreachable")
 
     monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: _BoomJudge())
     # The model is non-load-bearing: its failure degrades to unknown, never
     # failing the activity (which would stall the spine on a flaky model).
-    verdict = await activities.judge_changelog(make_candidate())
+    verdict = await activities.judge_changelog(
+        JudgeInput(candidate=make_candidate())
+    )
     assert isinstance(verdict, UnknownVerdict)
     assert "unavailable" in verdict.rationale.lower()
+
+
+async def test_judge_changelog_passes_loop_to_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeJudge(CleanVerdict(rationale="ok"))
+    changelog = Changelog(package="x", version=ver("1.4.3"), text="notes")
+    monkeypatch.setattr(
+        changelog_mod,
+        "HttpChangelogSource",
+        lambda: FakeChangelogSource(changelog),
+    )
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: fake)
+    await activities.judge_changelog(
+        JudgeInput(candidate=make_candidate(), loop=Loop.SECURITY_PATCH)
+    )
+    assert fake.loops == [Loop.SECURITY_PATCH]
+
+
+async def test_open_pull_request_security_loop_namespaces_branch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeForge(
+        existing_pr=None,
+        opened_pr=make_pr(
+            number=8, branch="froot/security-patch/left-pad-1.5.0"
+        ),
+    )
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(),
+    )
+    # A security bump is often a minor — the generalized Candidate allows it.
+    candidate = make_candidate(
+        package="left-pad", current="1.4.2", target="1.5.0"
+    )
+    await activities.open_pull_request(
+        OpenPrInput(
+            target=make_repo(),
+            candidate=candidate,
+            verdict=CleanVerdict(rationale="x"),
+            loop=Loop.SECURITY_PATCH,
+        )
+    )
+    assert fake.pushed is not None
+    assert fake.pushed.value.startswith("froot/security-patch/")

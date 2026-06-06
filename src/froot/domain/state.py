@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from froot.domain.base import Frozen
-from froot.domain.candidate import PatchCandidate
+from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.outcome import LoopOutcome
 from froot.domain.pull_request import PullRequestRef
@@ -24,14 +24,14 @@ class Discovered(Frozen):
     """A fresh candidate, not yet judged. The loop's entry state."""
 
     kind: Literal["discovered"] = "discovered"
-    candidate: PatchCandidate
+    candidate: Candidate
 
 
 class Judged(Frozen):
     """The changelog has been assessed; ready to open the PR."""
 
     kind: Literal["judged"] = "judged"
-    candidate: PatchCandidate
+    candidate: Candidate
     verdict: ChangelogVerdict
 
 
@@ -39,7 +39,7 @@ class AwaitingCi(Frozen):
     """The PR is open; the loop is durably waiting on the repo's CI."""
 
     kind: Literal["awaiting_ci"] = "awaiting_ci"
-    candidate: PatchCandidate
+    candidate: Candidate
     verdict: ChangelogVerdict
     pr: PullRequestRef
 

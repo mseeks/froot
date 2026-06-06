@@ -2,14 +2,36 @@ from __future__ import annotations
 
 from froot.domain.changelog import CleanVerdict, RiskyVerdict, UnknownVerdict
 from froot.domain.ecosystem import Ecosystem
+from froot.domain.loop import Loop
 from froot.policy.compose import (
     CLOSE_MARKER,
-    PR_LABELS,
     closed_on_red_comment,
+    pr_labels,
     pull_request_draft,
 )
 from froot.policy.naming import branch_name
 from tests.support import make_candidate, make_repo
+
+
+def test_security_draft_uses_security_namespace_and_justification():
+    from froot.domain.candidate import Candidate
+    from froot.domain.ecosystem import Ecosystem
+    from froot.domain.version import Version
+
+    repo = make_repo("acme/widgets")
+    candidate = Candidate(
+        package="left-pad",
+        ecosystem=Ecosystem.NPM,
+        current=Version(major=1, minor=2, patch=0),
+        target=Version(major=1, minor=3, patch=0),
+        justification="Clears GHSA-xxxx (CVE-1).",
+    )
+    draft = pull_request_draft(
+        repo, candidate, CleanVerdict(rationale="ok"), Loop.SECURITY_PATCH
+    )
+    assert draft.title == "security: bump left-pad to 1.3.0"
+    assert draft.branch.value == "froot/security-patch/left-pad-1.3.0"
+    assert "Clears GHSA-xxxx (CVE-1)." in draft.body
 
 
 def test_closed_on_red_comment_names_failing_checks():
@@ -80,4 +102,5 @@ def test_pr_labels_are_exactly_the_fixed_pair():
     How the proposal fared is recorded in the durable workflow history, not
     layered onto the PR as labels that accumulate across re-runs.
     """
-    assert PR_LABELS == ("froot", "dependency-patch")
+    assert pr_labels() == ("froot", "dependency-patch")
+    assert pr_labels(Loop.SECURITY_PATCH) == ("froot", "security-patch")

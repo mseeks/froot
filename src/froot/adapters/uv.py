@@ -43,14 +43,14 @@ from typing import TYPE_CHECKING
 import httpx
 
 from froot.adapters._proc import run_text
-from froot.domain.candidate import AvailableUpgrade
+from froot.domain.candidate import AvailableUpgrade, InstalledPackage
 from froot.domain.version import Version
 from froot.result import Ok
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from froot.domain.candidate import PatchCandidate
+    from froot.domain.candidate import Candidate
     from froot.domain.repo import TargetRepo
 
 _PYPI_JSON = "https://pypi.org/pypi"
@@ -253,8 +253,39 @@ class UvPackageManager:
                 )
         return tuple(upgrades)
 
+    async def list_installed(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[InstalledPackage, ...]:
+        """Report each direct dependency and its locked version (no network)."""
+        direct = parse_direct_dependencies(
+            (workspace / "pyproject.toml").read_text()
+        )
+        lock_path = workspace / "uv.lock"
+        locked = (
+            parse_locked_versions(lock_path.read_text())
+            if lock_path.exists()
+            else {}
+        )
+        installed: list[InstalledPackage] = []
+        for name in sorted(direct):
+            current_text = locked.get(name)
+            if current_text is None:
+                continue
+            match Version.parse(current_text):
+                case Ok(version):
+                    installed.append(
+                        InstalledPackage(
+                            package=name,
+                            ecosystem=target.ecosystem,
+                            version=version,
+                        )
+                    )
+                case _:
+                    continue
+        return tuple(installed)
+
     async def apply_patch_bump(
-        self, candidate: PatchCandidate, workspace: Path
+        self, candidate: Candidate, workspace: Path
     ) -> None:
         """Regenerate ``uv.lock`` at the target version (lockfile-only)."""
         args = [
