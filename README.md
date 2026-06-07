@@ -15,7 +15,9 @@ leaves the outcome behind as a signal. A human approves every merge until a clas
 gate — then froot auto-merges its clean, green bumps on an opted-in repo (off by default). The
 first loop keeps dependencies patched; froot is the chassis an army of such loops grows on.
 
-See **[SPEC.md](./SPEC.md)** for the what and the why.
+See **[VISION.md](./VISION.md)** for where this is headed — a common chassis for
+many pluggable loops, a *code factory* — and **[SPEC.md](./SPEC.md)** for the
+what and the why of the present design.
 
 Part of an exploration of
 [Many Hands Engineering](https://github.com/mseeks/many-hands-engineering) in practice.

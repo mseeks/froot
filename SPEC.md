@@ -196,6 +196,10 @@ an AST scan, a regex sweep — genuinely heterogeneous, never forced behind one 
 Rule of thumb: the chassis is the same for every loop and every repo; signal + lockfile-command
 + prompt are what make a loop a *specialist*.
 
+Where this seam is headed — an open loop *registry* the spine consumes (rather than an enum it
+branches on), loops feeding each other through the shared outcome ledger, and a pluggable
+mechanical-or-agentic executor behind the action — is the north star in [VISION.md](./VISION.md).
+
 ## Reputation: derived, never stored
 
 froot builds **no reputation store**. Reputation is a read-model computed when it's needed, from
