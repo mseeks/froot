@@ -69,9 +69,11 @@ a{{color:var(--accent);text-decoration:none}}a:hover{{text-decoration:underline}
 header{{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 22px;
 padding:26px 0 18px;border-bottom:1px solid var(--line)}}
 h1{{font-family:var(--serif);font-size:23px;margin:0;letter-spacing:-.01em;
-font-weight:600}}
+font-weight:600;display:inline-flex;align-items:center;gap:9px}}
 h1 .v{{font-family:var(--mono);color:var(--faint);font-weight:400;
-font-size:12px;margin-left:9px;letter-spacing:0}}
+font-size:12px;letter-spacing:0}}
+.ic{{width:15px;height:15px;flex:none}}
+.mark{{width:18px;height:18px;flex:none;color:var(--accent)}}
 .hstatus{{display:flex;align-items:center;gap:7px;font-size:13px}}
 .hmeta{{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;
 gap:7px 16px;color:var(--mut);font-size:12px}}
@@ -101,7 +103,7 @@ grid-template-columns:minmax(330px,1.05fr) minmax(300px,1fr)}}
 @media(max-width:780px){{.hero{{grid-template-columns:1fr}}}}
 .heroh{{font-size:11px;text-transform:uppercase;letter-spacing:.1em;
 color:var(--mut);font-weight:600;margin:0 0 14px;padding-bottom:7px;
-border-bottom:1px solid var(--line)}}
+border-bottom:1px solid var(--line);display:flex;align-items:center;gap:7px}}
 .gateflow{{display:flex;align-items:center;gap:14px;flex-wrap:wrap}}
 .bearings{{display:flex;flex-direction:column;min-width:172px;flex:1 1 172px}}
 .bearing{{display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -149,7 +151,7 @@ letter-spacing:.05em;font-weight:600;margin-top:5px}}
 .sec{{margin:30px 0 0}}
 .sech{{font-size:11px;text-transform:uppercase;letter-spacing:.1em;
 color:var(--mut);font-weight:600;margin:0 0 12px;padding-bottom:7px;
-border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}}
+border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}}
 .sech .n{{color:var(--faint);font-weight:500;letter-spacing:0;
 text-transform:none}}
 details.fold{{margin:14px 0 0;border-top:1px solid var(--line)}}
@@ -189,6 +191,67 @@ _THEME_JS = (
     "var n=c==='dark'?'light':'dark';r.setAttribute('data-theme',n);"
     "localStorage.setItem(k,n);};})();"
 )
+
+# A small set of hairline line-icons (inline SVG, stroke = currentColor, so they
+# inherit the muted ink and theme themselves). Anchors for the eye — tabs,
+# section headers, the wordmark — never on the number strip. Paths are 24x24.
+_ICONS = {
+    "sprout": (
+        '<path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/>'
+        '<path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3'
+        '-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6c-.8 1.2-1.1 2.6-1.1 '
+        '4 1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/>'
+    ),
+    "package": (
+        '<path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 '
+        '16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8Z"/>'
+        '<path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'
+    ),
+    "shield": (
+        '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 '
+        "4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 "
+        '0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>'
+    ),
+    "shield-check": (
+        '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 '
+        "4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 "
+        '0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'
+    ),
+    "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "activity": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    "layers": (
+        '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 '
+        '3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/>'
+        '<path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/>'
+        '<path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>'
+    ),
+    "inbox": (
+        '<path d="M22 12h-6l-2 3h-4l-2-3H2"/>'
+        '<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45'
+        '-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
+    ),
+    "lock": (
+        '<rect width="18" height="11" x="3" y="11" rx="2"/>'
+        '<path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
+    ),
+    "lock-open": (
+        '<rect width="18" height="11" x="3" y="11" rx="2"/>'
+        '<path d="M7 11V7a5 5 0 0 1 9.9-1"/>'
+    ),
+    "merge": (
+        '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/>'
+        '<path d="M6 21V9a9 9 0 0 0 9 9"/>'
+    ),
+}
+
+
+def _icon(name: str, cls: str = "ic") -> str:
+    return (
+        f'<svg class="{cls}" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
+        f'stroke-linejoin="round" aria-hidden="true">{_ICONS[name]}</svg>'
+    )
+
 
 _CI_CLASS = {
     "passed": "ok",
@@ -289,7 +352,8 @@ def _header(model: DashboardModel) -> str:
     )
     return (
         "<header>"
-        '<h1>froot<span class="v mono">gemma4:12b</span></h1>'
+        f"<h1>{_icon('sprout', 'mark')}froot"
+        '<span class="v mono">gemma4:12b</span></h1>'
         f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
         f'<span class="hmeta"><span class="srcs">{sources}</span>'
         f"<span>{len(model.repos_configured)} repos</span>"
@@ -356,18 +420,21 @@ def _gate_hero(view: LoopView) -> str:
         )
     if acting:
         out = (
-            f'<div class="outcome act"><div class="ot">{_dot("ok")}AUTO-MERGE'
-            '</div><div class="os">a class is acting now</div></div>'
+            f'<div class="outcome act"><div class="ot">{_icon("merge")}'
+            "AUTO-MERGE</div>"
+            '<div class="os">a class is acting now</div></div>'
         )
     elif earned:
         out = (
-            f'<div class="outcome act"><div class="ot">{_dot("ok")}EARNED</div>'
+            f'<div class="outcome act"><div class="ot">{_icon("lock-open")}'
+            "EARNED</div>"
             '<div class="os">acts where allowlisted</div></div>'
         )
     else:
         out = (
-            f'<div class="outcome hold"><div class="ot">{_dot("mute")}HOLD'
-            '</div><div class="os">building the record</div></div>'
+            f'<div class="outcome hold"><div class="ot">{_icon("lock")}HOLD'
+            "</div><div class="
+            '"os">building the record</div></div>'
         )
     flow = (
         '<div class="gateflow">'
@@ -385,7 +452,8 @@ def _gate_hero(view: LoopView) -> str:
         "Auto-merge is allowlist-gated (off by default).</p>"
     )
     return (
-        '<div><div class="heroh">Earned autonomy &middot; the gate</div>'
+        f'<div><div class="heroh">{_icon("shield-check")}'
+        "Earned autonomy &middot; the gate</div>"
         f"{flow}{caption}</div>"
     )
 
@@ -393,13 +461,13 @@ def _gate_hero(view: LoopView) -> str:
 def _class_table(view: LoopView) -> str:
     if not view.class_gates:
         return (
-            '<div><div class="heroh">Classes</div>'
+            f'<div><div class="heroh">{_icon("layers")}Classes</div>'
             '<div class="empty">No classes yet &mdash; a (repo, loop) '
             "earns the gate from its own track record.</div></div>"
         )
     rows = "".join(_class_row(g) for g in view.class_gates)
     return (
-        '<div><div class="heroh">Per-class standing</div>'
+        f'<div><div class="heroh">{_icon("layers")}Per-class standing</div>'
         '<table class="classes"><thead><tr><th>repo</th><th>rate</th>'
         "<th>defect</th><th>gate</th><th>budget/wk</th></tr></thead>"
         f"<tbody>{rows}</tbody></table></div>"
@@ -570,8 +638,8 @@ def _loop_panel(view: LoopView, pid: str, now: datetime) -> str:
 def _queue_sec(view: LoopView) -> str:
     if not view.gate:
         return (
-            '<div class="sec"><div class="sech">Approval queue '
-            '<span class="n">empty</span></div>'
+            f'<div class="sec"><div class="sech">{_icon("inbox")}'
+            'Approval queue <span class="n">empty</span></div>'
             '<div class="empty">Nothing awaiting you.</div></div>'
         )
     rows = "".join(
@@ -584,7 +652,7 @@ def _queue_sec(view: LoopView) -> str:
         for r in view.gate
     )
     return (
-        '<div class="sec"><div class="sech">Approval queue '
+        f'<div class="sec"><div class="sech">{_icon("inbox")}Approval queue '
         f'<span class="n">{len(view.gate)} yours</span></div>'
         '<table class="data"><thead><tr><th>package</th><th>&rarr;</th>'
         "<th>gate</th><th>pr</th></tr></thead>"
@@ -628,7 +696,8 @@ def _review_panel(model: DashboardModel, pid: str) -> str:
     )
     return (
         f'<section class="panel" id="{pid}">'
-        '<div class="heroh">Determinism review &middot; the transitive ring'
+        f'<div class="heroh">{_icon("search")}'
+        "Determinism review &middot; the transitive ring"
         f"</div>{note}{cards}{cad}"
         f'<div class="sec"><div class="sech">Reviews '
         f'<span class="n">{len(model.reviews)}</span></div>{body}</div>'
@@ -708,7 +777,8 @@ def _telemetry_panel(model: DashboardModel, pid: str, now: datetime) -> str:
     )
     return (
         f'<section class="panel" id="{pid}">'
-        '<div class="heroh">Run telemetry &middot; ClickHouse</div>'
+        f'<div class="heroh">{_icon("activity")}Run telemetry '
+        "&middot; ClickHouse</div>"
         f"{note}{body}</section>"
     )
 
@@ -726,14 +796,16 @@ def _loop_badge(view: LoopView) -> str:
 def page(model: DashboardModel) -> str:
     """Render the whole dashboard as one self-contained HTML document."""
     now = model.generated_at
-    # (tab-id, panel-id, label, badge, panel-html)
-    tabs: list[tuple[str, str, str, str, str]] = []
+    # (tab-id, panel-id, icon, label, badge, panel-html)
+    tabs: list[tuple[str, str, str, str, str, str]] = []
     for i, view in enumerate(model.bump_loops):
         pid, tid = f"panel-{i}", f"tab-{i}"
+        icon = "shield" if view.loop == "security-patch" else "package"
         tabs.append(
             (
                 tid,
                 pid,
+                icon,
                 view.title,
                 _loop_badge(view),
                 _loop_panel(view, pid, now),
@@ -743,6 +815,7 @@ def page(model: DashboardModel) -> str:
         (
             "tab-det",
             "panel-det",
+            "search",
             "Determinism review",
             str(model.review_record.reviewed),
             _review_panel(model, "panel-det"),
@@ -752,6 +825,7 @@ def page(model: DashboardModel) -> str:
         (
             "tab-tel",
             "panel-tel",
+            "activity",
             "Telemetry",
             "live" if model.telemetry.available else "off",
             _telemetry_panel(model, "panel-tel", now),
@@ -759,13 +833,13 @@ def page(model: DashboardModel) -> str:
     )
 
     inputs, labels, panels, rules = [], [], [], []
-    for idx, (tid, pid, label, badge, panel) in enumerate(tabs):
+    for idx, (tid, pid, icon, label, badge, panel) in enumerate(tabs):
         checked = " checked" if idx == 0 else ""
         inputs.append(
             f'<input class="tabin" type="radio" name="tab" id="{tid}"{checked}>'
         )
         labels.append(
-            f'<label for="{tid}">{escape(label)}'
+            f'<label for="{tid}">{_icon(icon)}{escape(label)}'
             f'<span class="badge">{escape(badge)}</span></label>'
         )
         panels.append(panel)
