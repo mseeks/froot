@@ -207,3 +207,15 @@ class ModelJudge(Protocol):
     ) -> ChangelogVerdict:
         """Assess a changelog into a verdict, framed by the loop."""
         ...
+
+    async def gate_review(
+        self, changelog: Changelog, loop: Loop = ...
+    ) -> ChangelogVerdict:
+        """Independently deep-review a bump at the gate (adversarial pass).
+
+        A second, stricter reading run only when a bump is about to auto-merge:
+        ``clean`` approves the merge, anything else holds it. Independent of the
+        first :meth:`judge` pass (its own model and prompt) so the two can
+        disagree — the fourth trust leg (§3.7).
+        """
+        ...

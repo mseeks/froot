@@ -46,6 +46,18 @@ class PullRequestClosed(Frozen):
     kind: Literal["pull_request_closed"] = "pull_request_closed"
 
 
+class GateReviewed(Frozen):
+    """The independent gate review returned its verdict on the bump.
+
+    Carries a :data:`ChangelogVerdict` like the first judge pass: ``clean``
+    approves the merge; anything else (``risky``/``unknown``) holds the PR for
+    the human. Fail-closed — a review that could not run arrives non-clean.
+    """
+
+    kind: Literal["gate_reviewed"] = "gate_reviewed"
+    verdict: ChangelogVerdict
+
+
 class PullRequestMerged(Frozen):
     """The earned bump's PR was auto-merged by the acting gate."""
 
@@ -64,6 +76,7 @@ LoopEvent = Annotated[
     | PullRequestReady
     | CiResolved
     | PullRequestClosed
+    | GateReviewed
     | PullRequestMerged
     | OutcomeRecorded,
     Field(discriminator="kind"),

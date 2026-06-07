@@ -29,10 +29,12 @@ from froot.domain.effects import (
     MergePullRequest,
     OpenPullRequest,
     RecordOutcome,
+    ReviewBump,
 )
 from froot.domain.events import (
     ChangelogJudged,
     CiResolved,
+    GateReviewed,
     LoopEvent,
     OutcomeRecorded,
     PullRequestClosed,
@@ -45,6 +47,7 @@ from froot.domain.state import (
     BumpState,
     Closing,
     Discovered,
+    GateReviewing,
     Judged,
     Merging,
     Recorded,
@@ -136,6 +139,8 @@ def advance(
             )
         case Closing():
             return _from_closing(state, event)
+        case GateReviewing():
+            return _from_gate_reviewing(state, event)
         case Merging():
             return _from_merging(state, event)
         case Recorded():
@@ -189,17 +194,18 @@ def _from_awaiting_ci(
                 ci=event.status,
             )
             # Green CI, a clean changelog, and the class has earned the grant:
-            # auto-merge the PR, then record the same outcome (the acting gate,
-            # §3.4 Stage 5). The per-PR conditions are checked here; the
-            # class-level grant arrives in auto_merge_eligible.
+            # deep-review the bump before merging (the fourth leg, §3.7), then
+            # merge on approval (the acting gate, §3.4 Stage 5). The per-PR
+            # conditions are checked here; the class-level grant arrives in
+            # auto_merge_eligible.
             if (
                 isinstance(event.status, CIPassed)
                 and state.verdict.kind == "clean"
                 and auto_merge_eligible
             ):
                 return _advanced(
-                    Merging(outcome=outcome),
-                    MergePullRequest(pr=state.pr),
+                    GateReviewing(outcome=outcome),
+                    ReviewBump(candidate=state.candidate, pr=state.pr),
                 )
             # Red CI with close-on-red on: close the PR first (the loop leaves
             # no rotting red proposal), then record the same outcome. Every
@@ -216,6 +222,29 @@ def _from_awaiting_ci(
             )
         case _:
             return _rejected(state, f"unexpected {event.kind} in awaiting_ci")
+
+
+def _from_gate_reviewing(state: GateReviewing, event: LoopEvent) -> Transition:
+    match event:
+        case GateReviewed():
+            # The independent deep review approved (clean): merge. Any other
+            # verdict holds — record the outcome and leave the PR for the human,
+            # exactly as a non-earned bump would. Fail-closed: a review that
+            # could not run arrives non-clean, so an unreviewable bump never
+            # auto-merges.
+            if event.verdict.kind == "clean":
+                return _advanced(
+                    Merging(outcome=state.outcome),
+                    MergePullRequest(pr=state.outcome.pr),
+                )
+            return _advanced(
+                Recorded(outcome=state.outcome),
+                RecordOutcome(outcome=state.outcome),
+            )
+        case _:
+            return _rejected(
+                state, f"unexpected {event.kind} in gate_reviewing"
+            )
 
 
 def _from_merging(state: Merging, event: LoopEvent) -> Transition:

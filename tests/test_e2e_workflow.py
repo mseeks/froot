@@ -47,6 +47,7 @@ _TASK_QUEUE = "froot-e2e"
 # The real bump activities — only the adapters beneath them are faked.
 _REAL_ACTIVITIES: list[Callable[..., Any]] = [
     activities.judge_changelog,
+    activities.gate_review,
     activities.open_pull_request,
     activities.check_ci,
     activities.record_outcome,

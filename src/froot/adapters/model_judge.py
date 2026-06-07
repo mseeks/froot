@@ -44,6 +44,27 @@ _SYSTEM_PROMPT = (
     "not speculate. Keep the rationale to one or two sentences."
 )
 
+# The gate reviewer's stance is adversarial and asymmetric: this bump is about
+# to merge with NO human in the loop, so the burden is on the changelog to prove
+# it is safe, not on the reviewer to prove it is dangerous. The same _Assessment
+# shape, read as approve/hold (clean = approve).
+_GATE_SYSTEM_PROMPT = (
+    "You are the LAST line of defense before a dependency upgrade auto-merges "
+    "with no human review. Re-read the changelog adversarially and decide "
+    "whether it is safe to merge unattended.\n"
+    "Return one verdict:\n"
+    "- clean: ONLY if the notes clearly describe nothing beyond fixes / docs / "
+    "internal changes — no behavioral change, no API change, no deprecation, "
+    "no ambiguity. This approves the merge.\n"
+    "- risky: any hint of behavior change, removal, deprecation, or surface a "
+    "reviewer should see; list the concerns. This holds the PR.\n"
+    "- unknown: the notes are empty, uninformative, or you are unsure. This "
+    "holds the PR.\n"
+    "The burden is on the changelog to prove safety: when in doubt, do NOT "
+    "return clean. Base concerns on what the text says; keep it to one or two "
+    "sentences."
+)
+
 
 def _loop_context(loop: Loop) -> str:
     """The one line that tells the model what kind of bump it is judging."""
@@ -85,26 +106,61 @@ def assessment_to_verdict(assessment: _Assessment) -> ChangelogVerdict:
     assert_never(assessment.verdict)
 
 
-class PydanticAiJudge:
-    """A :class:`~froot.ports.protocols.ModelJudge` backed by Pydantic AI."""
+def _gate_model() -> Model:
+    """Build the gate reviewer's model: the override, else the judge model."""
+    from froot.config.settings import ModelSettings
 
-    def __init__(self, model: Model | None = None) -> None:
-        """Build the agent; ``model`` defaults to the configured Ollama."""
+    return build_model(model_name=ModelSettings().gate_review_model or None)
+
+
+def _changelog_prompt(changelog: Changelog, loop: Loop) -> str:
+    """The shared user prompt: the bump's context and its changelog text."""
+    return (
+        f"{_loop_context(loop)}\n"
+        f"Package: {changelog.package}\n"
+        f"Target version: {changelog.version}\n"
+        f"Changelog:\n{changelog.text}"
+    )
+
+
+class PydanticAiJudge:
+    """A :class:`~froot.ports.protocols.ModelJudge` backed by Pydantic AI.
+
+    Two agents share the structured ``_Assessment`` output but differ in stance:
+    the neutral framing judge (:meth:`judge`) and the adversarial gate reviewer
+    (:meth:`gate_review`), each its own model so a steward can make the deep
+    review independent in capability, not just prompt.
+    """
+
+    def __init__(
+        self, model: Model | None = None, gate_model: Model | None = None
+    ) -> None:
+        """Build both agents.
+
+        ``model`` defaults to the configured Ollama; ``gate_model`` to the
+        gate-review override, else ``model``, else the gate-review model.
+        """
         self._agent: Agent[None, _Assessment] = Agent(
             model or build_model(),
             output_type=_Assessment,
             system_prompt=_SYSTEM_PROMPT,
+        )
+        self._gate_agent: Agent[None, _Assessment] = Agent(
+            gate_model or model or _gate_model(),
+            output_type=_Assessment,
+            system_prompt=_GATE_SYSTEM_PROMPT,
         )
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
     ) -> ChangelogVerdict:
         """Assess a changelog into a verdict, framed by the loop."""
-        prompt = (
-            f"{_loop_context(loop)}\n"
-            f"Package: {changelog.package}\n"
-            f"Target version: {changelog.version}\n"
-            f"Changelog:\n{changelog.text}"
-        )
-        result = await self._agent.run(prompt)
+        result = await self._agent.run(_changelog_prompt(changelog, loop))
+        return assessment_to_verdict(result.output)
+
+    async def gate_review(
+        self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
+    ) -> ChangelogVerdict:
+        """Adversarially re-review a bump at the gate (clean = approve)."""
+        result = await self._gate_agent.run(_changelog_prompt(changelog, loop))
         return assessment_to_verdict(result.output)

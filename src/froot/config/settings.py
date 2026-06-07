@@ -144,6 +144,11 @@ class ModelSettings(BaseSettings):
 
     ollama_model: str = Field(default="gemma4:26b", min_length=1)
     ollama_url: str = Field(default="http://localhost:11434/v1", min_length=1)
+    # The independent gate reviewer (the fourth trust leg, §3.7). Empty means
+    # "reuse ``ollama_model``" — so by default it is the same model run a second
+    # time with an adversarial prompt; point it at a stronger model to make the
+    # deep review genuinely independent in capability, not just in framing.
+    gate_review_model: str = ""
 
 
 class TelemetrySettings(BaseSettings):

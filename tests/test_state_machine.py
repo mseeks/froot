@@ -9,10 +9,12 @@ from froot.domain.effects import (
     MergePullRequest,
     OpenPullRequest,
     RecordOutcome,
+    ReviewBump,
 )
 from froot.domain.events import (
     ChangelogJudged,
     CiResolved,
+    GateReviewed,
     LoopEvent,
     OutcomeRecorded,
     PullRequestClosed,
@@ -25,6 +27,7 @@ from froot.domain.state import (
     BumpState,
     Closing,
     Discovered,
+    GateReviewing,
     Judged,
     Merging,
     Recorded,
@@ -109,7 +112,9 @@ def test_red_ci_records_directly_when_close_on_red_off():
 
 
 # ── The acting gate (auto-merge on an earned class) ──────────────────────────
-def test_green_clean_eligible_class_auto_merges():
+def test_green_clean_eligible_class_enters_gate_review():
+    # An earned, clean, green bump does not merge straight away: it first goes
+    # to the independent deep review (the fourth leg), carrying its outcome.
     state = AwaitingCi(
         candidate=make_candidate(), verdict=_VERDICT, pr=make_pr()
     )
@@ -117,10 +122,46 @@ def test_green_clean_eligible_class_auto_merges():
         state, CiResolved(status=CIPassed()), auto_merge_eligible=True
     )
     assert transition.kind is TransitionKind.ADVANCED
+    assert isinstance(transition.next, GateReviewing)
+    assert isinstance(transition.effects[0], ReviewBump)
+    # The outcome is preserved on GateReviewing to merge/record afterwards.
+    assert transition.next.outcome.ci_passed
+
+
+def test_gate_review_clean_then_merges():
+    outcome = LoopOutcome(
+        candidate=make_candidate(),
+        verdict=_VERDICT,
+        pr=make_pr(),
+        ci=CIPassed(),
+    )
+    transition = advance(
+        GateReviewing(outcome=outcome),
+        GateReviewed(verdict=CleanVerdict(rationale="re-read clean")),
+    )
+    assert transition.kind is TransitionKind.ADVANCED
     assert isinstance(transition.next, Merging)
     assert isinstance(transition.effects[0], MergePullRequest)
-    # The outcome is preserved on Merging to record after the merge.
-    assert transition.next.outcome.ci_passed
+    assert transition.next.outcome is outcome
+
+
+def test_gate_review_hold_records_and_leaves_open():
+    # A non-clean deep review holds: record the outcome, leave the PR open for
+    # the human — never merge. Fail-closed for unknown too.
+    outcome = LoopOutcome(
+        candidate=make_candidate(),
+        verdict=_VERDICT,
+        pr=make_pr(),
+        ci=CIPassed(),
+    )
+    transition = advance(
+        GateReviewing(outcome=outcome),
+        GateReviewed(verdict=RiskyVerdict(rationale="found a deprecation")),
+    )
+    assert transition.kind is TransitionKind.ADVANCED
+    assert isinstance(transition.next, Recorded)
+    assert isinstance(transition.effects[0], RecordOutcome)
+    assert transition.next.outcome is outcome
 
 
 def test_green_clean_not_eligible_records_and_leaves_open():
@@ -205,6 +246,10 @@ def test_unexpected_events_are_rejected_in_each_state():
             ChangelogJudged(verdict=_VERDICT),
         ),
         (Closing(outcome=recorded.outcome), ChangelogJudged(verdict=_VERDICT)),
+        (
+            GateReviewing(outcome=recorded.outcome),
+            ChangelogJudged(verdict=_VERDICT),
+        ),
         (Merging(outcome=recorded.outcome), ChangelogJudged(verdict=_VERDICT)),
         (recorded, PullRequestReady(pr=pr)),
     ]

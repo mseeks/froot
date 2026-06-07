@@ -26,10 +26,12 @@ with workflow.unsafe.imports_passed_through():
         MergePullRequest,
         OpenPullRequest,
         RecordOutcome,
+        ReviewBump,
     )
     from froot.domain.events import (
         ChangelogJudged,
         CiResolved,
+        GateReviewed,
         LoopEvent,
         OutcomeRecorded,
         PullRequestClosed,
@@ -52,6 +54,7 @@ with workflow.unsafe.imports_passed_through():
         BumpParams,
         CiCheckInput,
         CloseInput,
+        GateReviewInput,
         JudgeInput,
         MergeInput,
         OpenPrInput,
@@ -161,6 +164,16 @@ class BumpWorkflow:
                     retry_policy=TOOL_RETRY,
                 )
                 return PullRequestClosed()
+            case ReviewBump():
+                verdict = await workflow.execute_activity(
+                    activities.gate_review,
+                    GateReviewInput(
+                        candidate=effect.candidate, pr=effect.pr, loop=loop
+                    ),
+                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+                return GateReviewed(verdict=verdict)
             case MergePullRequest():
                 await workflow.execute_activity(
                     activities.merge_pull_request,

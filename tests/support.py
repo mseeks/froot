@@ -273,12 +273,26 @@ class FakeChangelogSource:
 class FakeJudge:
     """In-memory :class:`~froot.ports.protocols.ModelJudge`."""
 
-    def __init__(self, verdict: ChangelogVerdict | None = None) -> None:
+    def __init__(
+        self,
+        verdict: ChangelogVerdict | None = None,
+        gate_verdict: ChangelogVerdict | None = None,
+    ) -> None:
         self.verdict: ChangelogVerdict = verdict or CleanVerdict(rationale="ok")
+        # The gate reviewer's verdict; defaults to the judge's, so an
+        # unconfigured fake approves a clean bump at the gate too.
+        self.gate_verdict: ChangelogVerdict = gate_verdict or self.verdict
         self.loops: list[Loop] = []
+        self.gate_loops: list[Loop] = []
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
     ) -> ChangelogVerdict:
         self.loops.append(loop)
         return self.verdict
+
+    async def gate_review(
+        self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
+    ) -> ChangelogVerdict:
+        self.gate_loops.append(loop)
+        return self.gate_verdict

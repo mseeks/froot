@@ -32,6 +32,7 @@ WORKFLOWS = [
 ALL_ACTIVITIES: list[Callable[..., object]] = [
     activities.scan_candidates,
     activities.judge_changelog,
+    activities.gate_review,
     activities.open_pull_request,
     activities.check_ci,
     activities.record_outcome,

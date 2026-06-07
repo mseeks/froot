@@ -57,11 +57,25 @@ class Closing(Frozen):
     outcome: LoopOutcome
 
 
+class GateReviewing(Frozen):
+    """A green, clean, earned bump is being deep-reviewed before it merges.
+
+    The transient stage between the green CI reading and the merge, where the
+    spine runs the independent adversarial gate review (the fourth trust leg,
+    §3.7). On approval the loop merges; on a hold it records and leaves the PR
+    for the human. Carries the already-built outcome so the next step needs
+    nothing more.
+    """
+
+    kind: Literal["gate_reviewing"] = "gate_reviewing"
+    outcome: LoopOutcome
+
+
 class Merging(Frozen):
     """The PR is being auto-merged before record (green, clean, earned class).
 
     The mirror of :class:`Closing` on the success side — a transient stage
-    between a green CI reading and the terminal record, where the spine merges
+    between a passed gate review and the terminal record, where the spine merges
     the PR (§3.4 Stage 5) and then records the same outcome. Reached only when a
     steward has allowlisted the repo; otherwise the loop records and leaves the
     PR for the human.
@@ -80,6 +94,12 @@ class Recorded(Frozen):
 
 # The state of a single bump's loop.
 BumpState = Annotated[
-    Discovered | Judged | AwaitingCi | Closing | Merging | Recorded,
+    Discovered
+    | Judged
+    | AwaitingCi
+    | Closing
+    | GateReviewing
+    | Merging
+    | Recorded,
     Field(discriminator="kind"),
 ]

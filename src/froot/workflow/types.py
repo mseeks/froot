@@ -107,6 +107,18 @@ class JudgeInput(Frozen):
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
+class GateReviewInput(Frozen):
+    """Input to the gate-review activity (the fourth trust leg's deep read).
+
+    The candidate to re-read and the PR it is about to merge (for the log); the
+    loop frames the adversarial prompt just as the first judge pass is framed.
+    """
+
+    candidate: Candidate
+    pr: PullRequestRef
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
 class OpenPrInput(Frozen):
     """Input to the open-pull-request activity."""
 

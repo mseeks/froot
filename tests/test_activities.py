@@ -28,6 +28,7 @@ from froot.workflow.types import (
     CiCheckInput,
     CloseInput,
     DispatchInput,
+    GateReviewInput,
     GateSelfTestInput,
     JudgeInput,
     MergeInput,
@@ -529,6 +530,64 @@ async def test_judge_changelog_passes_loop_to_model(
         JudgeInput(candidate=make_candidate(), loop=Loop.SECURITY_PATCH)
     )
     assert fake.loops == [Loop.SECURITY_PATCH]
+
+
+async def test_gate_review_approves_a_clean_re_read(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    changelog = Changelog(package="left-pad", version=ver("1.4.3"), text="fix")
+    monkeypatch.setattr(
+        changelog_mod,
+        "HttpChangelogSource",
+        lambda: FakeChangelogSource(changelog),
+    )
+    fake = FakeJudge(gate_verdict=CleanVerdict(rationale="re-read clean"))
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: fake)
+    verdict = await activities.gate_review(
+        GateReviewInput(candidate=make_candidate(), pr=make_pr(number=7))
+    )
+    assert isinstance(verdict, CleanVerdict)  # clean = approve the merge
+    assert fake.gate_loops == [Loop.DEPENDENCY_PATCH]
+
+
+async def test_gate_review_holds_when_no_changelog(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Fail-closed: nothing to review -> a non-clean verdict, so the bump never
+    # merges unattended.
+    monkeypatch.setattr(
+        changelog_mod, "HttpChangelogSource", lambda: FakeChangelogSource(None)
+    )
+    verdict = await activities.gate_review(
+        GateReviewInput(candidate=make_candidate(), pr=make_pr(number=7))
+    )
+    # UnknownVerdict is a hold — never "clean", so the bump never merges.
+    assert isinstance(verdict, UnknownVerdict)
+
+
+async def test_gate_review_holds_on_model_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Fail-closed the other way: a reviewer that errors holds, never approves.
+    changelog = Changelog(package="left-pad", version=ver("1.4.3"), text="fix")
+    monkeypatch.setattr(
+        changelog_mod,
+        "HttpChangelogSource",
+        lambda: FakeChangelogSource(changelog),
+    )
+
+    class _BoomReviewer:
+        async def gate_review(
+            self, changelog: Changelog, loop: object = None
+        ) -> object:
+            raise RuntimeError("ollama unreachable")
+
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: _BoomReviewer())
+    verdict = await activities.gate_review(
+        GateReviewInput(candidate=make_candidate(), pr=make_pr(number=7))
+    )
+    # A reviewer that errors holds (unknown), never approves.
+    assert isinstance(verdict, UnknownVerdict)
 
 
 async def test_open_pull_request_security_loop_namespaces_branch(

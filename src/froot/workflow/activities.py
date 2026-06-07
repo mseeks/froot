@@ -40,6 +40,7 @@ from froot.workflow.types import (
     CloseInput,
     DispatchInput,
     DispatchReviewInput,
+    GateReviewInput,
     GateSelfTestInput,
     JudgeInput,
     MergeInput,
@@ -194,6 +195,56 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
         return UnknownVerdict(
             rationale=f"Changelog judge unavailable ({type(exc).__name__})."
         )
+
+
+@activity.defn
+async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
+    """Independently deep-review a bump at the gate; fail-closed to a hold.
+
+    The fourth trust leg (§3.7): a second, adversarial model pass over the
+    changelog, run only when a bump is about to auto-merge. ``clean`` approves
+    the merge; ``risky``/``unknown`` hold the PR for the human. Fail-CLOSED — a
+    missing changelog or a model error returns a non-clean verdict, so an
+    unreviewable bump never merges unattended. This is the opposite disposition
+    from :func:`judge_changelog` (which degrades-to-proceed): here the safe
+    direction is to hold, and a non-clean verdict already means hold.
+    """
+    from froot.adapters.changelog_http import HttpChangelogSource
+    from froot.adapters.model_judge import PydanticAiJudge
+
+    changelog = await HttpChangelogSource().fetch(params.candidate)
+    if changelog is None:
+        verdict: ChangelogVerdict = UnknownVerdict(
+            rationale="No changelog to review; holding (fail-closed)."
+        )
+    else:
+        try:
+            verdict = await PydanticAiJudge().gate_review(
+                changelog, params.loop
+            )
+        except Exception as exc:
+            activity.logger.warning(
+                "gate reviewer unavailable for %s; holding: %r",
+                params.candidate.package,
+                exc,
+            )
+            verdict = UnknownVerdict(
+                rationale=f"Gate reviewer unavailable ({type(exc).__name__})."
+            )
+    _gate_log.info(
+        json.dumps(
+            {
+                "event": "gate_review",
+                "loop": params.loop.value,
+                "pr": params.pr.number,
+                "pr_url": params.pr.url,
+                "package": params.candidate.package,
+                "verdict": verdict.kind,
+                "approved": verdict.kind == "clean",
+            }
+        )
+    )
+    return verdict
 
 
 @activity.defn

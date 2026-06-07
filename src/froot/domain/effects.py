@@ -57,15 +57,32 @@ class ClosePullRequest(Frozen):
     failing: tuple[str, ...] = ()
 
 
+class ReviewBump(Frozen):
+    """Independently deep-review a bump at the gate, before it auto-merges.
+
+    The fourth trust leg (§3.7's *sampled deep review*, here run on every
+    auto-merge candidate). Emitted when a green, clean, earned bump is about to
+    merge: the spine asks a second, independent, adversarial model pass to read
+    the changelog with a "find the reason to hold" stance. Only its approval
+    lets the merge proceed; anything else holds the PR for the human. The
+    expensive leg, spent only at the high-stakes moment.
+    """
+
+    kind: Literal["review_bump"] = "review_bump"
+    candidate: Candidate
+    pr: PullRequestRef
+
+
 class MergePullRequest(Frozen):
     """Auto-merge a clean+green bump whose class has earned the grant.
 
     Emitted in place of going straight to the record when CI came back green,
-    the changelog read clean, and the (repo, loop) class has earned auto-merge
-    on an allowlisted repo (the acting gate — §3.4 Stage 5). The record still
-    follows (this state's outcome), so the merged outcome is logged either way.
-    Nothing reaches here unless a steward has opted the repo into the allowlist;
-    the default is empty, so the loop stays propose-only.
+    the changelog read clean, the (repo, loop) class has earned auto-merge on an
+    allowlisted repo, *and* the independent gate review approved (the acting
+    gate — §3.4 Stage 5). The record still follows (this state's outcome), so
+    the merged outcome is logged either way. Nothing reaches here unless a
+    steward has opted the repo into the allowlist; the default is empty, so the
+    loop stays propose-only.
     """
 
     kind: Literal["merge_pull_request"] = "merge_pull_request"
@@ -85,6 +102,7 @@ Effect = Annotated[
     | OpenPullRequest
     | AwaitCi
     | ClosePullRequest
+    | ReviewBump
     | MergePullRequest
     | RecordOutcome,
     Field(discriminator="kind"),
