@@ -31,12 +31,12 @@ if TYPE_CHECKING:
 
 _LIGHT = (
     "--fg:#1b1f24;--mut:#586273;--faint:#8b94a3;--line:#e9ebef;--hair:#d6dae1;"
-    "--bg:#fcfcfd;--tint:#f5f6f9;--accent:#2563eb;--ok:#2f7d4f;--warn:#8a6011;"
+    "--bg:#fcfcfd;--tint:#f5f6f9;--accent:#7c3aed;--ok:#2f7d4f;--warn:#8a6011;"
     "--bad:#b23a2e"
 )
 _DARK = (
     "--fg:#e7e9ee;--mut:#9aa3b2;--faint:#6b7484;--line:#22262e;--hair:#333a45;"
-    "--bg:#0b0d10;--tint:#14171c;--accent:#5b9bff;--ok:#4cae6e;--warn:#d6a23f;"
+    "--bg:#0b0d10;--tint:#14171c;--accent:#a78bfa;--ok:#4cae6e;--warn:#d6a23f;"
     "--bad:#e07a6e"
 )
 # Editorial-minimal "read-model" idiom: structure from hairlines + whitespace +
@@ -117,7 +117,7 @@ font-variant-numeric:tabular-nums}}
 .gatenode .gl{{font-size:10px;text-transform:uppercase;letter-spacing:.1em;
 color:var(--mut);font-weight:600}}
 .gatenode .gv{{font-family:var(--serif);font-size:30px;font-weight:600;
-line-height:1.1;color:var(--accent);font-variant-numeric:tabular-nums}}
+line-height:1.1;color:var(--fg);font-variant-numeric:tabular-nums}}
 .gatenode .gs{{font-size:11px;color:var(--faint)}}
 .outcome{{flex:0 0 auto;display:flex;flex-direction:column;gap:3px}}
 .outcome .ot{{display:flex;align-items:center;gap:7px;font-size:15px;
@@ -195,15 +195,6 @@ _THEME_JS = (
 # inherit the muted ink and theme themselves). Anchors for the eye — tabs,
 # section headers, the wordmark — never on the number strip. Paths are 24x24.
 _ICONS = {
-    "fruit": (
-        '<circle cx="11.5" cy="14.5" r="6.2"/><path d="M11.5 8.3V4"/>'
-        '<path d="M11.5 5.5c1.4-2 3.5-2.6 5.8-2.2-.4 2.5-2.5 3.7-5.8 2.2z"/>'
-    ),
-    "berry": (
-        '<circle cx="9.4" cy="15" r="3"/><circle cx="15" cy="15" r="3"/>'
-        '<circle cx="12.2" cy="19" r="3"/><path d="M12 12.2V5"/>'
-        '<path d="M12 8.5c2.4 0 3.9-1.5 4.4-4-2.5 0-4 1.6-4.4 4z"/>'
-    ),
     "package": (
         '<path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 '
         '16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8Z"/>'
@@ -252,6 +243,23 @@ def _icon(name: str, cls: str = "ic") -> str:
         f'<svg class="{cls}" viewBox="0 0 24 24" fill="none" '
         'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
         f'stroke-linejoin="round" aria-hidden="true">{_ICONS[name]}</svg>'
+    )
+
+
+def _wordmark() -> str:
+    """The froot mark: a fruit in the accent, with a single green leaf.
+
+    Two-tone on purpose — the one spot color is allowed to be richer. The body
+    and stem ride the accent (currentColor); the leaf is the semantic green,
+    so the mark reads as a piece of fruit, not a logo abstraction.
+    """
+    return (
+        '<svg class="mark" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
+        'stroke-linejoin="round" aria-hidden="true">'
+        '<circle cx="11.5" cy="14.5" r="6.2"/><path d="M11.5 8.3V4"/>'
+        '<path d="M11.5 5.5c1.4-2 3.5-2.6 5.8-2.2-.4 2.5-2.5 3.7-5.8 2.2z" '
+        'stroke="var(--ok)"/></svg>'
     )
 
 
@@ -354,7 +362,7 @@ def _header(model: DashboardModel) -> str:
     )
     return (
         "<header>"
-        f"<h1>{_icon('fruit', 'mark')}froot</h1>"
+        f"<h1>{_wordmark()}froot</h1>"
         f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
         f'<span class="hmeta"><span class="srcs">{sources}</span>'
         '<button class="themetgl" type="button" onclick="__toggleTheme()"'
