@@ -66,12 +66,10 @@ a{{color:var(--accent);text-decoration:none}}a:hover{{text-decoration:underline}
 .dot.bad{{background:var(--bad)}}.dot.mute{{background:var(--faint)}}
 .dot.acc{{background:var(--accent)}}
 /* header */
-header{{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 22px;
+header{{display:flex;align-items:center;flex-wrap:wrap;gap:9px 22px;
 padding:26px 0 18px;border-bottom:1px solid var(--line)}}
 h1{{font-family:var(--serif);font-size:23px;margin:0;letter-spacing:-.01em;
 font-weight:600;display:inline-flex;align-items:center;gap:9px}}
-h1 .v{{font-family:var(--mono);color:var(--faint);font-weight:400;
-font-size:12px;letter-spacing:0}}
 .ic{{width:15px;height:15px;flex:none}}
 .mark{{width:18px;height:18px;flex:none;color:var(--accent)}}
 .hstatus{{display:flex;align-items:center;gap:7px;font-size:13px}}
@@ -93,6 +91,7 @@ padding:10px 4px;margin:0 12px -1px 0;font-size:13.5px;font-weight:600;
 color:var(--mut);border-bottom:2px solid transparent;white-space:nowrap;
 transition:color .14s}}
 nav.tabbar label:hover{{color:var(--fg)}}
+nav.tabbar label.aside{{margin-left:auto}}
 nav.tabbar label .badge{{font-family:var(--mono);font-weight:500;font-size:11px;
 color:var(--faint)}}
 .panel{{display:none;padding:26px 0 0;animation:fade .16s ease}}
@@ -196,11 +195,14 @@ _THEME_JS = (
 # inherit the muted ink and theme themselves). Anchors for the eye — tabs,
 # section headers, the wordmark — never on the number strip. Paths are 24x24.
 _ICONS = {
-    "sprout": (
-        '<path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/>'
-        '<path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3'
-        '-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6c-.8 1.2-1.1 2.6-1.1 '
-        '4 1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/>'
+    "fruit": (
+        '<circle cx="11.5" cy="14.5" r="6.2"/><path d="M11.5 8.3V4"/>'
+        '<path d="M11.5 5.5c1.4-2 3.5-2.6 5.8-2.2-.4 2.5-2.5 3.7-5.8 2.2z"/>'
+    ),
+    "berry": (
+        '<circle cx="9.4" cy="15" r="3"/><circle cx="15" cy="15" r="3"/>'
+        '<circle cx="12.2" cy="19" r="3"/><path d="M12 12.2V5"/>'
+        '<path d="M12 8.5c2.4 0 3.9-1.5 4.4-4-2.5 0-4 1.6-4.4 4z"/>'
     ),
     "package": (
         '<path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 '
@@ -352,13 +354,9 @@ def _header(model: DashboardModel) -> str:
     )
     return (
         "<header>"
-        f"<h1>{_icon('sprout', 'mark')}froot"
-        '<span class="v mono">gemma4:12b</span></h1>'
+        f"<h1>{_icon('fruit', 'mark')}froot</h1>"
         f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
         f'<span class="hmeta"><span class="srcs">{sources}</span>'
-        f"<span>{len(model.repos_configured)} repos</span>"
-        f"<span>built {_ago(model.generated_at, model.generated_at)}"
-        " · reload to recompute</span>"
         '<button class="themetgl" type="button" onclick="__toggleTheme()"'
         ' title="Toggle light / dark"'
         ' aria-label="Toggle light or dark theme">&#9680;</button>'
@@ -838,8 +836,10 @@ def page(model: DashboardModel) -> str:
         inputs.append(
             f'<input class="tabin" type="radio" name="tab" id="{tid}"{checked}>'
         )
+        # Telemetry is cross-cutting, not a loop — float it to the far right.
+        lcls = ' class="aside"' if tid == "tab-tel" else ""
         labels.append(
-            f'<label for="{tid}">{_icon(icon)}{escape(label)}'
+            f'<label{lcls} for="{tid}">{_icon(icon)}{escape(label)}'
             f'<span class="badge">{escape(badge)}</span></label>'
         )
         panels.append(panel)
