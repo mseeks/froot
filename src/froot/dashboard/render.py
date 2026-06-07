@@ -257,8 +257,9 @@ def _wordmark() -> str:
         '<svg class="mark" viewBox="0 0 24 24" fill="none" '
         'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
         'stroke-linejoin="round" aria-hidden="true">'
-        '<circle cx="11.5" cy="14.5" r="6.2"/><path d="M11.5 8.3V4"/>'
-        '<path d="M11.5 5.5c1.4-2 3.5-2.6 5.8-2.2-.4 2.5-2.5 3.7-5.8 2.2z" '
+        '<circle cx="11.5" cy="14.5" r="6.2"/>'
+        '<path d="M11.5 8.3V6.15" stroke="var(--ok)"/>'
+        '<path d="M11.5 6.15c1.4-2 3.5-2.6 5.8-2.2-.4 2.5-2.5 3.7-5.8 2.2z" '
         'stroke="var(--ok)"/></svg>'
     )
 
