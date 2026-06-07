@@ -75,6 +75,8 @@ font-size:12px;margin-left:9px;letter-spacing:0}}
 .hstatus{{display:flex;align-items:center;gap:7px;font-size:13px}}
 .hmeta{{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;
 gap:7px 16px;color:var(--mut);font-size:12px}}
+.srcs{{display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px 14px}}
+.src{{display:inline-flex;align-items:center;gap:6px}}
 .themetgl{{background:transparent;border:1px solid var(--line);border-radius:
 999px;width:30px;height:30px;cursor:pointer;color:var(--mut);font-size:14px;
 line-height:1;display:inline-flex;align-items:center;justify-content:center;
@@ -280,15 +282,16 @@ def _alive(model: DashboardModel) -> tuple[str, str]:
 
 def _header(model: DashboardModel) -> str:
     kind, label = _alive(model)
-    sources = " ".join(
-        f"{_dot('ok' if s.ok else 'bad')}{escape(s.name)}"
+    sources = "".join(
+        f'<span class="src">{_dot("ok" if s.ok else "bad")}'
+        f"{escape(s.name)}</span>"
         for s in model.sources
     )
     return (
         "<header>"
         '<h1>froot<span class="v mono">gemma4:12b</span></h1>'
         f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
-        f'<span class="hmeta"><span>{sources}</span>'
+        f'<span class="hmeta"><span class="srcs">{sources}</span>'
         f"<span>{len(model.repos_configured)} repos</span>"
         f"<span>built {_ago(model.generated_at, model.generated_at)}"
         " · reload to recompute</span>"
