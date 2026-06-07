@@ -64,6 +64,25 @@ without rewiring the plant.*
    fabrication loop writing arbitrary code needs an isolated worktree, a tool
    allowlist, resource caps. Isolation scales with how dangerous the station is —
    this is where per-loop worker images eventually earn their keep.
+   - **The chosen first sandbox is the target's own CI.** The worker never
+     installs or runs a repo's toolchain (the invariant); but some signals need
+     it — e.g. Python dead-code (`deptry`) must run where the deps are installed.
+     Rather than add in-cluster isolation, dispatch a pinned ephemeral CI job
+     (GitHub Actions `workflow_dispatch`) behind a single Temporal activity and
+     read the result. Zero cluster footprint, full isolation, and *CI is already
+     the oracle* — the SPEC says as much. This is the home for the deferred uv
+     dead-code arm.
+   - **The cluster rules out microVMs.** DOKS gives no guaranteed `/dev/kvm`, so
+     Kata/Firecracker degrade to software emulation; gVisor is the only viable
+     in-cluster strong isolation, and only if a need survives the CI-sandbox
+     approach. Don't add it speculatively.
+   - **Agentic executors stay replay-safe via the durable-execution pattern.**
+     When a loop's action becomes an LLM coding harness, wrap it so its
+     model/tool calls are *recorded Temporal activities* (Pydantic AI's
+     `TemporalAgent` does exactly this) — the workflow stays deterministic
+     regardless of what the sandbox does. The determinism bar is
+     bounded/idempotent (pin base-image-by-digest, pin tool versions, key off
+     the lockfile hash), not bit-for-bit.
 4. **The universal gate.** Nothing merges without CI **and** earned, per-class,
    revocable autonomy. The gate is the one safety system that makes *any* station
    safe to add and run unattended.
@@ -123,8 +142,11 @@ class.
 ## The build arc
 
 1. **Mechanical repair loops** — dependency-patch ✓, security-patch ✓, and
-   **dead-code** (next): the first loop whose action edits *source*, not a
-   manifest, yet still has a clean oracle (CI green after removal). The bridge.
+   **dead-code** (unused dependencies): npm via `knip` ✓ — static analysis, no
+   install, so it fits the clone-only worker. The uv arm (`deptry`) is deferred:
+   it needs the target's deps installed, so it waits on the CI sandbox above. A
+   safe-to-remove judge vetoes *at the signal* (a tool used without an import
+   never becomes a PR), and CI stays the oracle.
 2. **The enum → loop-registry refactor** — the moment froot stops being "a few
    loops" and becomes "the chassis you plug loops into."
 3. **Fabrication loops** — ordered by oracle strength (test-backfill, flaky-fix

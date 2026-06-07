@@ -32,9 +32,6 @@ if TYPE_CHECKING:
     from froot.domain.repo import TargetRepo
 
 _NODE_MODULES = "node_modules/"
-# knip pinned to a major so the signal is reproducible; the worker image caches
-# it (``npx --yes`` reuses the global install, falling back to a fetch).
-_KNIP_SPEC = "knip@5"
 
 
 def parse_direct_dependencies(package_json: str) -> frozenset[str]:
@@ -256,18 +253,21 @@ class NpmPackageManager:
 
         Best-effort: ``knip`` exits non-zero precisely *because* it found
         issues, so the exit code is ignored and stdout is parsed regardless;
-        crashed or empty output simply yields no removals. ``justification``
-        records the detector so the judge and the PR body can name it.
+        crashed or empty output simply yields no removals. ``knip`` is baked
+        into the worker image and on ``PATH``; if it is absent (e.g. local
+        dev), the signal degrades to no removals rather than raising.
+        ``justification`` records the detector so the judge and PR body name it.
         """
-        _, out, _ = await run_text(
-            "npx",
-            "--yes",
-            _KNIP_SPEC,
-            "--reporter",
-            "json",
-            "--no-progress",
-            cwd=workspace,
-        )
+        try:
+            _, out, _ = await run_text(
+                "knip",
+                "--reporter",
+                "json",
+                "--no-progress",
+                cwd=workspace,
+            )
+        except FileNotFoundError:
+            return ()
         return tuple(
             Removal(
                 package=name,

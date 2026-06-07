@@ -223,14 +223,19 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 1. **✓ Close one loop.** dependency-patch, end-to-end, on one target repo. The template. *Done.*
 2. **✓ Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
    Proves the template is a template. *Done.*
-3. **✓ Earn autonomy.** The acting gate: a class auto-merges its clean+green bumps once it clears
+3. **✓ Widen the work item.** dead-code (unused dependencies) — the first loop whose action edits
+   *source*, not just a manifest, and the first to carry a non-bump work item (a `Removal`) through
+   the same spine. A safe-to-remove judge vetoes *at the signal*; CI stays the oracle. npm via
+   `knip` (static, no install) *done*; the uv arm (`deptry`) is deferred pending a sandbox where
+   the target's deps can be installed (the target's own CI — see [VISION.md](./VISION.md)).
+4. **✓ Earn autonomy.** The acting gate: a class auto-merges its clean+green bumps once it clears
    four independent bearings (approval rate, post-merge defect rate, an adversarial gate
    self-test, an independent deep review) on an allowlisted repo. *Done — off by default until a
    steward allowlists a repo.*
-4. **Coordinate.** Notifier loops (`determinism` ships; `derived-state` next) that durably guard
+5. **Coordinate.** Notifier loops (`determinism` ships; `derived-state` next) that durably guard
    an already-running durable app, and loops reading each other's GitHub/ClickStack signals. *In
    progress.*
-5. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
+6. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
    are the ones that need a real agentic coding harness; that decision is made *then*, on terrain
    that already works — not now.
 

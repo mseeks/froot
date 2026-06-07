@@ -167,6 +167,19 @@ async def test_list_unused_builds_removals_from_knip(
     assert all(r.justification == "unused (knip)" for r in removals)
 
 
+async def test_list_unused_degrades_when_knip_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    # knip is baked into the worker image, but if it is missing (e.g. local dev)
+    # the signal yields no removals rather than raising and failing the scan.
+    async def fake_run_text(*args: str, cwd: Path) -> tuple[int, str, str]:
+        raise FileNotFoundError("knip")
+
+    monkeypatch.setattr(npm_mod, "run_text", fake_run_text)
+    removals = await NpmPackageManager().list_unused(make_repo(), tmp_path)
+    assert removals == ()
+
+
 async def test_remove_dependency_runs_npm_uninstall(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

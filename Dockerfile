@@ -18,6 +18,13 @@ RUN apt-get update \
         git nodejs npm ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# knip: the dead-code loop's signal for npm — a static analyzer (no install, no
+# project code) that lists unused dependencies. Pinned and baked in so the scan
+# is reproducible and never fetches at runtime; it reads source only, so it needs
+# no node_modules, fitting the clone-only worker. (Debian's nodejs 18.19 meets
+# knip 5's `>=18.18` engine.)
+RUN npm install -g knip@5
+
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
