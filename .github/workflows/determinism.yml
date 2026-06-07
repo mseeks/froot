@@ -41,5 +41,5 @@ jobs:
       # chasing first-party helpers out of each @workflow.defn, so a hazard
       # hidden behind an imported helper fails the gate too. Imports froot, so
       # it needs the synced env (unlike the install-free lexical kernel).
-      - run: uv sync --extra dev --extra ai --extra github --extra otel
+      - run: uv sync --extra dev --extra ai --extra github --extra otel --extra sandbox
       - run: uv run python scripts/check_determinism_transitive.py

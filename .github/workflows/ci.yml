@@ -19,7 +19,7 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - name: Sync (dev + runtime extras, matching `make sync`)
-        run: uv sync --extra dev --extra ai --extra github --extra otel
+        run: uv sync --extra dev --extra ai --extra github --extra otel --extra sandbox
       - run: uv run ruff format --check src tests
       - run: uv run ruff check src tests
       - run: uv run mypy
