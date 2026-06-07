@@ -3,7 +3,7 @@
 MHE's "conditional" property: trust belongs to a task class *in a specific
 environment*, and when the environment changes some trust resets. The dominant
 piece of froot's judgment environment is the judge model — a changelog verdict
-from ``gemma4:26b`` is not the same evidence as one from ``gemma4:e4b`` — so a
+from ``gemma4:12b`` is not the same evidence as one from ``gemma4:e4b`` — so a
 track record earned under one model must not silently transfer to another
 ("The model underneath changes... Trust drops from auto-merge back to
 propose-plus-review until the new model re-earns it", §3.7).
@@ -32,7 +32,7 @@ _SLUG_RE: Final = re.compile(r"[^a-z0-9]+")
 def environment_slug(model: str) -> str:
     """A short, legible slug of the judgment environment (currently the model).
 
-    ``gemma4:26b`` -> ``gemma4-26b``. Readable on purpose: the steward should be
+    ``gemma4:12b`` -> ``gemma4-12b``. Readable on purpose: the steward should be
     able to read which environment a class's trust was earned under.
     """
     slug = _SLUG_RE.sub("-", model.strip().lower()).strip("-")

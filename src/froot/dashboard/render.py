@@ -717,7 +717,7 @@ def _footer() -> str:
         "narrow to a single loop on a single repo (a version bump is not a "
         "security patch; they never share a record), conditional on its "
         "environment (judge "
-        '<span class="mono">gemma4:26b</span>, lockfile-only regen), revocable '
+        '<span class="mono">gemma4:12b</span>, lockfile-only regen), revocable '
         "(the allowlist), and time-expiring. A met gate auto-merges only "
         "after passing an independent deep review; everywhere not allowlisted "
         "the same verdict is the advisory <b>shadow gate</b> a steward "
