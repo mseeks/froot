@@ -82,3 +82,36 @@ direction and to the framework it is an instance of.
 If a change doesn't fit these, it probably belongs in the chassis, not a loop —
 or the abstraction needs widening (toward the registry). Prefer widening the seam
 over special-casing the spine.
+
+### Split or unify? (one loop, or an identifier + a doer)
+
+Before building, decide whether detection and action are **one** loop or **two**
+(an advisory identifier that leaves a signal — an issue/label — and a separate
+doer that acts on it). The rule:
+
+> **Split when there is a *gap* between "what's wrong" and "what to do." Unify
+> when the signal *is* the spec.**
+
+A bump unifies: the signal (`1.4.3` available / `GHSA-x` fixed in `1.2.4`) is a
+pure function to the action (bump to that version) — cheap, mechanical,
+self-specifying. An intermediate "issue: bump X" would be strictly redundant with
+the PR. dependency-patch and security-patch are one loop each for exactly this
+reason — the split is not something they skipped, it's that they don't need it.
+
+A fabrication loop splits: "this is untested" is a *problem statement*, not a
+spec — producing the test needs **generation** (reasoning about functionality and
+intent). Three questions decide it:
+
+1. Is the signal independently useful to a human on its own? (bump: no; a
+   coverage-gap radar: yes)
+2. Is signal → action a pure function, or does it need generation/judgment?
+   (bump: pure fn; write-a-test: generation)
+3. Is the action expensive enough that you must *select*, not do-all? (bump:
+   cheap, do-all; agentic test-writing: expensive, triage a backlog)
+
+Mostly "no" → **unify** (a mechanical loop; detection is the spec). Mostly "yes"
+→ **split** (a fabrication loop; the identifier is advisory — stage it first per
+§3.4 observe-then-act — and the doer drains its backlog, rate-capped + idempotent
+so it converges instead of piling up). The line tracks the *action's* nature, not
+the domain: a patch bump unifies, but a major-version *migration* — where the
+signal doesn't specify the change — would split.
