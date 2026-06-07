@@ -94,7 +94,10 @@ async def test_e2b_sandbox_uploads_runs_in_workdir_and_kills(
         exit_code=0, stdout="DEPTRY-JSON", stderr="log"
     )
     assert fake.files.writes == ["/tmp/work.tar"]  # checkout uploaded
-    assert ("deptry .", "/work") in fake.commands.runs  # ran in upload dir
+    assert (
+        "deptry .",
+        "/tmp/froot-work",
+    ) in fake.commands.runs  # ran in the upload dir
     assert fake.killed  # torn down
 
 

@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 # upload and the sandbox re-installs from the manifest anyway.
 _TAR_EXCLUDE = frozenset({".git", ".venv", "node_modules", "__pycache__"})
 
+# Where the checkout is extracted and the script runs. Under /tmp because the
+# sandbox's non-root user cannot write the filesystem root.
+_WORKDIR = "/tmp/froot-work"
+
 
 def workdir_tar(workdir: Path) -> bytes:
     """Pack ``workdir``'s contents into an uncompressed tar (pure).
@@ -73,15 +77,16 @@ class E2bSandbox:
         )
         try:
             await sandbox.files.write("/tmp/work.tar", tar)
-            # Extract is froot's own command, not the target's — a failure here
-            # is an infrastructure fault, so let it raise.
+            # Extract under /tmp (the sandbox's non-root user can't write the
+            # filesystem root). This is froot's own command, not the target's —
+            # a failure here is an infrastructure fault, so let it raise.
             await sandbox.commands.run(
-                "mkdir -p /work && tar -xf /tmp/work.tar -C /work",
+                f"mkdir -p {_WORKDIR} && tar -xf /tmp/work.tar -C {_WORKDIR}",
                 timeout=120,
             )
             try:
                 result = await sandbox.commands.run(
-                    script, cwd="/work", timeout=timeout
+                    script, cwd=_WORKDIR, timeout=timeout
                 )
                 return SandboxResult(
                     exit_code=result.exit_code,
