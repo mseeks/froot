@@ -148,6 +148,8 @@ class FakeForge:
         self.closed: list[int] = []
         self.deleted_branches: list[BranchName] = []
         self.comments: list[tuple[int, str]] = []
+        # Every auto-merge, in order, so the acting-gate tests can assert it.
+        self.merged: list[int] = []
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         self.checked_out = True
@@ -206,6 +208,16 @@ class FakeForge:
         self.closed.append(number)
         if delete_branch:
             self.deleted_branches.append(branch)
+
+    async def merge_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        *,
+        head_sha: str | None = None,
+        merge_method: str = "squash",
+    ) -> None:
+        self.merged.append(number)
 
 
 class FakePackageManager:

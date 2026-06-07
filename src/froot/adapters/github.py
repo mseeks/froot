@@ -465,6 +465,32 @@ class GitHubForge:
         if delete_resp.status_code not in (404, 422):
             _raise_for_status(delete_resp)
 
+    async def merge_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        *,
+        head_sha: str | None = None,
+        merge_method: str = "squash",
+    ) -> None:
+        """Merge the PR (squash by default) — the acting gate's one write.
+
+        Passes the expected ``head_sha`` so GitHub refuses the merge if the head
+        moved since the gate decided (optimistic concurrency — a new commit must
+        re-earn the green). Idempotent enough for a retry: a 405 ("not
+        mergeable", e.g. already merged) is surfaced, not silently swallowed, so
+        a genuinely unmergeable state never reads as a success.
+        """
+        slug = target.repo.slug
+        body: dict[str, str] = {"merge_method": merge_method}
+        if head_sha is not None:
+            body["sha"] = head_sha
+        async with _client() as client:
+            resp = await client.put(
+                f"/repos/{slug}/pulls/{number}/merge", json=body
+            )
+        _raise_for_status(resp)
+
     async def upsert_issue_comment(
         self, target: TargetRepo, number: int, marker: str, body: str
     ) -> str:

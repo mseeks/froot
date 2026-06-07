@@ -51,6 +51,8 @@ _REAL_ACTIVITIES: list[Callable[..., Any]] = [
     activities.check_ci,
     activities.record_outcome,
     activities.close_pull_request,
+    activities.auto_merge_eligible,
+    activities.merge_pull_request,
 ]
 
 

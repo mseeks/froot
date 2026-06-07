@@ -28,10 +28,12 @@ from froot.domain.pull_request import PullRequestRef
 from froot.workflow.bump_workflow import BumpWorkflow
 from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.types import (
+    AutoMergeInput,
     BumpParams,
     CiCheckInput,
     CloseInput,
     JudgeInput,
+    MergeInput,
     OpenPrInput,
     RecordInput,
 )
@@ -42,6 +44,10 @@ _TASK_QUEUE = "froot-test"
 _ci_replies: list[CIStatus] = []
 # PR numbers the close-on-red path closed, in order.
 _closed: list[int] = []
+# PR numbers the acting gate auto-merged, in order, and the eligibility the
+# mock gate reports (a test flips it to exercise the auto-merge path).
+_merged: list[int] = []
+_eligible: bool = False
 
 
 @activity.defn(name="judge_changelog")
@@ -69,12 +75,24 @@ async def _mock_close(params: CloseInput) -> None:
     _closed.append(params.pr.number)
 
 
+@activity.defn(name="auto_merge_eligible")
+async def _mock_eligible(params: AutoMergeInput) -> bool:
+    return _eligible
+
+
+@activity.defn(name="merge_pull_request")
+async def _mock_merge(params: MergeInput) -> None:
+    _merged.append(params.pr.number)
+
+
 _MOCKS: list[Callable[..., Any]] = [
     _mock_judge,
     _mock_open_pr,
     _mock_check_ci,
     _mock_record,
     _mock_close,
+    _mock_eligible,
+    _mock_merge,
 ]
 
 
@@ -149,3 +167,29 @@ async def test_ci_timeout_when_never_resolves():
     _ci_replies.extend([CIPending()] * 100)
     outcome = await _run_bump()
     assert isinstance(outcome.ci, CITimedOut)
+
+
+async def test_green_clean_auto_merges_when_class_eligible():
+    # The acting gate: a clean+green bump on a class that has earned the grant
+    # is auto-merged by the loop (the eligibility mock reports True here).
+    global _eligible
+    _ci_replies.clear()
+    _closed.clear()
+    _merged.clear()
+    _eligible = True
+    try:
+        outcome = await _run_bump()
+    finally:
+        _eligible = False
+    assert outcome.ci_passed
+    assert _merged == [7]  # the loop merged it
+    assert _closed == []
+
+
+async def test_green_clean_not_merged_when_class_not_eligible():
+    # The default: no grant -> propose-only, the loop never merges.
+    _ci_replies.clear()
+    _merged.clear()
+    outcome = await _run_bump()
+    assert outcome.ci_passed
+    assert _merged == []

@@ -35,11 +35,13 @@ from froot.policy.naming import (
 from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
 from froot.workflow.types import (
     AdjudicateInput,
+    AutoMergeInput,
     CiCheckInput,
     CloseInput,
     DispatchInput,
     DispatchReviewInput,
     JudgeInput,
+    MergeInput,
     OpenPrInput,
     PostReviewInput,
     PrReviewParams,
@@ -296,6 +298,73 @@ async def dispatch_bump(params: DispatchInput) -> None:
         # This bump already has a loop (running or completed) — a no-op, so
         # re-scanning never opens a second PR for the same bump.
         return
+
+
+@activity.defn
+async def auto_merge_eligible(params: AutoMergeInput) -> bool:
+    """Whether this (repo, loop) class has earned the auto-merge grant.
+
+    Short-circuits to ``False`` for any repo a steward has not allowlisted (the
+    default), so the common case costs nothing. Otherwise it re-derives the
+    class's standing from the live GitHub history — the same triangulated,
+    windowed, environment-scoped computation the dashboard's shadow gate shows
+    (``read_model.earned_now``) — so the acting gate and the advisory panel can
+    never disagree. Best-effort: any read failure degrades to ``False`` (hold),
+    never an auto-merge.
+    """
+    from datetime import UTC, datetime
+
+    from froot.config.settings import AutonomySettings, ModelSettings
+    from froot.dashboard import github_source, read_model
+    from froot.policy.environment import environment_slug
+
+    policy = AutonomySettings().policy()
+    repo = params.target.repo.slug
+    if repo not in policy.allowlisted_repos:
+        return False
+    now = datetime.now(UTC)
+    prs, prs_error = await github_source.fetch((repo,))
+    if prs_error is not None:
+        return False  # can't confirm the record -> hold, never merge blind
+    outcomes, _ = await github_source.fetch_outcomes(
+        (repo,), prs, now=now, window_days=policy.window_days
+    )
+    return read_model.earned_now(
+        now,
+        prs,
+        outcomes,
+        repo,
+        params.loop,
+        policy,
+        environment_slug(ModelSettings().ollama_model),
+    )
+
+
+@activity.defn
+async def merge_pull_request(params: MergeInput) -> None:
+    """Auto-merge an earned, clean+green bump's PR (the acting gate's write).
+
+    Reached only after the pure machine confirmed clean+green and the class
+    earned the grant on an allowlisted repo. Passes the head SHA so GitHub
+    refuses the merge if the head moved since the gate decided.
+    """
+    from froot.adapters.github import GitHubForge
+
+    await GitHubForge().merge_pull_request(
+        params.target, params.pr.number, head_sha=params.pr.head_sha
+    )
+    _log.info(
+        json.dumps(
+            {
+                "event": "pr_merged",
+                "loop": params.loop.value,
+                "reason": "auto_merge",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "pr_url": params.pr.url,
+            }
+        )
+    )
 
 
 @activity.defn

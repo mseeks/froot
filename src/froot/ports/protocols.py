@@ -174,6 +174,22 @@ class Forge(Protocol):
         """
         ...
 
+    async def merge_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        *,
+        head_sha: str | None = None,
+        merge_method: str = "squash",
+    ) -> None:
+        """Merge the PR (the acting gate's one write).
+
+        Passes the expected ``head_sha`` so the merge is refused if the head
+        moved since the gate decided. An unmergeable state surfaces as an error
+        rather than a silent success.
+        """
+        ...
+
 
 class ChangelogSource(Protocol):
     """Best-effort fetch of a target version's changelog / release notes."""

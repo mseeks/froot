@@ -135,6 +135,27 @@ class CloseInput(Frozen):
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
+class MergeInput(Frozen):
+    """Input to the merge-pull-request activity (the acting gate's write)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class AutoMergeInput(Frozen):
+    """Input to the auto-merge-eligibility activity (the class-level grant).
+
+    The activity asks whether this ``(target, loop)`` class has *earned* the
+    auto-merge grant on an allowlisted repo — the class-level half of the gate
+    the pure machine can't compute (it needs the class's history). A no-op
+    returning False for any repo a steward has not allowlisted.
+    """
+
+    target: TargetRepo
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
 class DispatchInput(Frozen):
     """Input to the dispatch-bump activity (start a bump loop)."""
 

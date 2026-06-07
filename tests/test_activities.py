@@ -11,6 +11,8 @@ import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
 import froot.adapters.osv as osv_mod
 import froot.adapters.registry as registry_mod
+import froot.dashboard.github_source as github_source_mod
+import froot.dashboard.read_model as read_model_mod
 import froot.workflow.temporal_client as temporal_client
 from froot.domain.candidate import AvailableUpgrade
 from froot.domain.changelog import Changelog, CleanVerdict, UnknownVerdict
@@ -21,11 +23,13 @@ from froot.domain.outcome import LoopOutcome
 from froot.policy.naming import bump_workflow_id
 from froot.workflow import activities
 from froot.workflow.types import (
+    AutoMergeInput,
     BumpParams,
     CiCheckInput,
     CloseInput,
     DispatchInput,
     JudgeInput,
+    MergeInput,
     OpenPrInput,
     ReconcileInput,
     RecordInput,
@@ -336,6 +340,74 @@ async def test_close_pull_request_comments_then_closes_and_deletes(
     # The "why" is posted (idempotent comment path) and names the failing check.
     assert fake.comments and fake.comments[-1][0] == 7
     assert "build" in fake.comments[-1][1]
+
+
+async def test_merge_pull_request_merges_via_forge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeForge()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    pr = make_pr(number=7)
+    await activities.merge_pull_request(
+        MergeInput(target=make_repo(), pr=pr, loop=Loop.DEPENDENCY_PATCH)
+    )
+    # Auto-merged through the forge (the head SHA is pinned for concurrency).
+    assert fake.merged == [7]
+
+
+async def test_auto_merge_eligible_false_when_not_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The default: empty allowlist -> hold, and not even a network read.
+    monkeypatch.delenv("FROOT_AUTOMERGE_ALLOWLIST", raising=False)
+
+    async def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("fetch must not run when the repo is not allowed")
+
+    monkeypatch.setattr(github_source_mod, "fetch", _boom)
+    eligible = await activities.auto_merge_eligible(
+        AutoMergeInput(target=make_repo(), loop=Loop.DEPENDENCY_PATCH)
+    )
+    assert eligible is False
+
+
+async def test_auto_merge_eligible_true_when_class_earned(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Allowlisted + the triangulated read says earned -> the grant is live.
+    monkeypatch.setenv("FROOT_AUTOMERGE_ALLOWLIST", "acme/widgets")
+
+    async def _fetch(repos: tuple[str, ...]) -> tuple[tuple[object, ...], None]:
+        return (), None
+
+    async def _fetch_outcomes(
+        repos: object, prs: object, **kwargs: object
+    ) -> tuple[dict[object, object], None]:
+        return {}, None
+
+    monkeypatch.setattr(github_source_mod, "fetch", _fetch)
+    monkeypatch.setattr(github_source_mod, "fetch_outcomes", _fetch_outcomes)
+    monkeypatch.setattr(read_model_mod, "earned_now", lambda *a, **k: True)
+    eligible = await activities.auto_merge_eligible(
+        AutoMergeInput(target=make_repo(), loop=Loop.DEPENDENCY_PATCH)
+    )
+    assert eligible is True
+
+
+async def test_auto_merge_eligible_false_on_github_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Allowlisted but the record can't be read -> hold, never merge blind.
+    monkeypatch.setenv("FROOT_AUTOMERGE_ALLOWLIST", "acme/widgets")
+
+    async def _fetch(repos: tuple[str, ...]) -> tuple[tuple[object, ...], str]:
+        return (), "rate limited"
+
+    monkeypatch.setattr(github_source_mod, "fetch", _fetch)
+    eligible = await activities.auto_merge_eligible(
+        AutoMergeInput(target=make_repo(), loop=Loop.DEPENDENCY_PATCH)
+    )
+    assert eligible is False
 
 
 async def test_reconcile_open_prs_closes_superseded(

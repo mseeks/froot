@@ -57,6 +57,21 @@ class ClosePullRequest(Frozen):
     failing: tuple[str, ...] = ()
 
 
+class MergePullRequest(Frozen):
+    """Auto-merge a clean+green bump whose class has earned the grant.
+
+    Emitted in place of going straight to the record when CI came back green,
+    the changelog read clean, and the (repo, loop) class has earned auto-merge
+    on an allowlisted repo (the acting gate — §3.4 Stage 5). The record still
+    follows (this state's outcome), so the merged outcome is logged either way.
+    Nothing reaches here unless a steward has opted the repo into the allowlist;
+    the default is empty, so the loop stays propose-only.
+    """
+
+    kind: Literal["merge_pull_request"] = "merge_pull_request"
+    pr: PullRequestRef
+
+
 class RecordOutcome(Frozen):
     """Record the closed-loop outcome (label the PR, emit run telemetry)."""
 
@@ -70,6 +85,7 @@ Effect = Annotated[
     | OpenPullRequest
     | AwaitCi
     | ClosePullRequest
+    | MergePullRequest
     | RecordOutcome,
     Field(discriminator="kind"),
 ]

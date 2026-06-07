@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from froot.domain.changelog import CleanVerdict
-from froot.domain.ci import CIFailed, CIPassed, CIPending
+from froot.domain.changelog import CleanVerdict, RiskyVerdict
+from froot.domain.ci import CIAbsent, CIFailed, CIPassed, CIPending
 from froot.domain.effects import (
     AwaitCi,
     ClosePullRequest,
     JudgeChangelog,
+    MergePullRequest,
     OpenPullRequest,
     RecordOutcome,
 )
@@ -15,6 +16,7 @@ from froot.domain.events import (
     LoopEvent,
     OutcomeRecorded,
     PullRequestClosed,
+    PullRequestMerged,
     PullRequestReady,
 )
 from froot.domain.outcome import LoopOutcome
@@ -24,6 +26,7 @@ from froot.domain.state import (
     Closing,
     Discovered,
     Judged,
+    Merging,
     Recorded,
 )
 from froot.policy.state_machine import TransitionKind, advance, start
@@ -105,6 +108,73 @@ def test_red_ci_records_directly_when_close_on_red_off():
     assert isinstance(transition.effects[0], RecordOutcome)
 
 
+# ── The acting gate (auto-merge on an earned class) ──────────────────────────
+def test_green_clean_eligible_class_auto_merges():
+    state = AwaitingCi(
+        candidate=make_candidate(), verdict=_VERDICT, pr=make_pr()
+    )
+    transition = advance(
+        state, CiResolved(status=CIPassed()), auto_merge_eligible=True
+    )
+    assert transition.kind is TransitionKind.ADVANCED
+    assert isinstance(transition.next, Merging)
+    assert isinstance(transition.effects[0], MergePullRequest)
+    # The outcome is preserved on Merging to record after the merge.
+    assert transition.next.outcome.ci_passed
+
+
+def test_green_clean_not_eligible_records_and_leaves_open():
+    # The default: no class grant -> propose-only, record, leave for the human.
+    state = AwaitingCi(
+        candidate=make_candidate(), verdict=_VERDICT, pr=make_pr()
+    )
+    transition = advance(state, CiResolved(status=CIPassed()))
+    assert transition.kind is TransitionKind.ADVANCED
+    assert isinstance(transition.next, Recorded)
+    assert isinstance(transition.effects[0], RecordOutcome)
+
+
+def test_risky_verdict_does_not_auto_merge_even_if_eligible():
+    # The per-PR condition (clean changelog) is checked in the machine; a risky
+    # verdict never auto-merges, regardless of the class grant.
+    state = AwaitingCi(
+        candidate=make_candidate(),
+        verdict=RiskyVerdict(rationale="a deprecation"),
+        pr=make_pr(),
+    )
+    transition = advance(
+        state, CiResolved(status=CIPassed()), auto_merge_eligible=True
+    )
+    assert isinstance(transition.next, Recorded)
+    assert isinstance(transition.effects[0], RecordOutcome)
+
+
+def test_absent_ci_does_not_auto_merge_even_if_clean_and_eligible():
+    # No oracle is never a pass: absent CI records, never auto-merges.
+    state = AwaitingCi(
+        candidate=make_candidate(), verdict=_VERDICT, pr=make_pr()
+    )
+    transition = advance(
+        state, CiResolved(status=CIAbsent()), auto_merge_eligible=True
+    )
+    assert isinstance(transition.next, Recorded)
+    assert isinstance(transition.effects[0], RecordOutcome)
+
+
+def test_merging_records_on_pull_request_merged():
+    outcome = LoopOutcome(
+        candidate=make_candidate(),
+        verdict=_VERDICT,
+        pr=make_pr(),
+        ci=CIPassed(),
+    )
+    transition = advance(Merging(outcome=outcome), PullRequestMerged())
+    assert transition.kind is TransitionKind.ADVANCED
+    assert isinstance(transition.next, Recorded)
+    assert isinstance(transition.effects[0], RecordOutcome)
+    assert transition.next.outcome is outcome
+
+
 def test_closing_records_on_pull_request_closed():
     outcome = LoopOutcome(
         candidate=make_candidate(),
@@ -135,6 +205,7 @@ def test_unexpected_events_are_rejected_in_each_state():
             ChangelogJudged(verdict=_VERDICT),
         ),
         (Closing(outcome=recorded.outcome), ChangelogJudged(verdict=_VERDICT)),
+        (Merging(outcome=recorded.outcome), ChangelogJudged(verdict=_VERDICT)),
         (recorded, PullRequestReady(pr=pr)),
     ]
     for state, event in rejections:

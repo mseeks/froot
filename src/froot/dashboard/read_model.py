@@ -408,6 +408,26 @@ def _class_gates(
     return tuple(gates)
 
 
+def earned_now(
+    now: datetime,
+    prs: tuple[GithubPr, ...],
+    outcomes: dict[tuple[str, int], str],
+    repo: str,
+    loop: Loop,
+    policy: AutonomyPolicy,
+    environment: str,
+) -> bool:
+    """Whether one (repo, loop) class has earned its gate, from live data.
+
+    The exact computation the dashboard's class-gate panel shows, exposed so the
+    acting gate (the loop) reuses it rather than duplicating the windowing,
+    environment filter, and triangulation. Pure over already-fetched data.
+    """
+    rows = _bump_rows(now, prs, (), outcomes)
+    gates = _class_gates(now, rows, (repo,), (loop,), policy, environment)
+    return any(g.earned for g in gates)
+
+
 def _gate(
     rows: tuple[BumpRow, ...],
     gates: tuple[ClassGate, ...],

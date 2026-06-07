@@ -46,6 +46,12 @@ class PullRequestClosed(Frozen):
     kind: Literal["pull_request_closed"] = "pull_request_closed"
 
 
+class PullRequestMerged(Frozen):
+    """The earned bump's PR was auto-merged by the acting gate."""
+
+    kind: Literal["pull_request_merged"] = "pull_request_merged"
+
+
 class OutcomeRecorded(Frozen):
     """The outcome was recorded; the loop has nothing left to do."""
 
@@ -58,6 +64,7 @@ LoopEvent = Annotated[
     | PullRequestReady
     | CiResolved
     | PullRequestClosed
+    | PullRequestMerged
     | OutcomeRecorded,
     Field(discriminator="kind"),
 ]
