@@ -242,10 +242,15 @@ class FakePackageManager:
         self,
         upgrades: tuple[AvailableUpgrade, ...] = (),
         installed: tuple[InstalledPackage, ...] = (),
+        unused: tuple[Removal, ...] = (),
     ) -> None:
         self.upgrades = upgrades
         self.installed = installed
+        self.unused = unused
         self.applied: Candidate | None = None
+        # Every dependency removed, in order, so the dead-code tests can assert
+        # exactly what the action did.
+        self.removed: list[Removal] = []
 
     async def list_upgrades(
         self, target: TargetRepo, workspace: Path
@@ -261,6 +266,16 @@ class FakePackageManager:
         self, candidate: Candidate, workspace: Path
     ) -> None:
         self.applied = candidate
+
+    async def list_unused(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[Removal, ...]:
+        return self.unused
+
+    async def remove_dependency(
+        self, removal: Removal, workspace: Path
+    ) -> None:
+        self.removed.append(removal)
 
 
 class FakeAdvisorySource:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from froot.adapters.npm import NpmPackageManager
 from froot.adapters.registry import package_manager_for
 from froot.adapters.uv import (
@@ -13,7 +15,24 @@ from froot.adapters.uv import (
     parse_locked_versions,
 )
 from froot.domain.ecosystem import Ecosystem
-from tests.support import make_repo, ver
+from tests.support import make_removal, make_repo, ver
+
+
+async def test_list_unused_is_deferred_for_uv(tmp_path):
+    # The uv dead-code signal is deferred (deptry needs the project's deps
+    # installed); until a sandbox lands it yields nothing, so the loop never
+    # proposes a removal for a uv repo.
+    removals = await UvPackageManager().list_unused(
+        make_repo(ecosystem=Ecosystem.UV), tmp_path
+    )
+    assert removals == ()
+
+
+async def test_remove_dependency_is_not_implemented_for_uv(tmp_path):
+    with pytest.raises(NotImplementedError, match="deferred"):
+        await UvPackageManager().remove_dependency(
+            make_removal(ecosystem=Ecosystem.UV), tmp_path
+        )
 
 
 async def test_list_installed_reads_direct_deps_and_locked_versions(tmp_path):

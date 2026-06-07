@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         PullRequestDraft,
         PullRequestRef,
     )
+    from froot.domain.removal import Removal
     from froot.domain.repo import TargetRepo
 
 
@@ -63,6 +64,35 @@ class PackageManager(Protocol):
 
         Lockfile-only and with install scripts disabled: it resolves and
         writes the dependency tree but runs no project or dependency code.
+        """
+        ...
+
+    async def list_unused(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[Removal, ...]:
+        """Report each unused direct dependency — the dead-code signal.
+
+        Runs a static analyzer over the checkout (npm via ``knip``): no install,
+        no project or dependency code executed. Best-effort and conservative — a
+        tool that errors or finds nothing yields no removals, never a raise, so
+        a flaky signal never blocks the loop. Each result is a raw flag
+        (``justification`` names the detector); the loop's safe-to-remove judge
+        vetoes each before any PR is opened.
+
+        An ecosystem whose static analysis needs the project's dependencies
+        installed (uv via ``deptry``) yields nothing here until froot has a
+        sandboxed executor — the worker never installs a target's dependencies.
+        """
+        ...
+
+    async def remove_dependency(
+        self, removal: Removal, workspace: Path
+    ) -> None:
+        """Remove the dependency from the manifest + lockfile (lockfile-only).
+
+        ``npm uninstall`` with the environment untouched (no ``node_modules``):
+        it rewrites the manifest and relocks but runs no project or dependency
+        code. The real build + tests happen in the repo's CI, the oracle.
         """
         ...
 

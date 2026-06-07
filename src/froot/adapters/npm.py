@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from froot.adapters._proc import run_text
 from froot.domain.candidate import AvailableUpgrade, InstalledPackage
+from froot.domain.removal import Removal
 from froot.domain.version import Version
 from froot.result import Ok
 
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
     from froot.domain.repo import TargetRepo
 
 _NODE_MODULES = "node_modules/"
+# knip pinned to a major so the signal is reproducible; the worker image caches
+# it (``npx --yes`` reuses the global install, falling back to a fetch).
+_KNIP_SPEC = "knip@5"
 
 
 def parse_direct_dependencies(package_json: str) -> frozenset[str]:
@@ -105,6 +109,59 @@ def parse_versions(stdout: str) -> tuple[Version, ...]:
                 case _:
                     continue
     return tuple(versions)
+
+
+def _loads_embedded_json(stdout: str) -> object:
+    """``json.loads`` ``stdout``, tolerating leading plugin chatter.
+
+    knip's plugins may print progress lines to stdout *before* the JSON report,
+    so a plain parse can fail; this retries from the first ``{``. Empty or
+    unparseable input yields ``None``.
+    """
+    text = stdout.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    brace = text.find("{")
+    if brace < 0:
+        return None
+    try:
+        return json.loads(text[brace:])
+    except json.JSONDecodeError:
+        return None
+
+
+def parse_knip_unused(stdout: str) -> tuple[tuple[str, bool], ...]:
+    """Parse ``knip --reporter json`` into ``(package, dev)`` unused flags.
+
+    knip groups issues by file; each issue's ``dependencies`` lists unused
+    production deps and ``devDependencies`` unused dev deps, every entry an
+    object with a ``name``. Returns one ``(name, dev)`` pair per unused
+    dependency (``dev`` True for a devDependency). Empty or unparseable output
+    yields ``()`` — conservative: no flags, never a raise.
+    """
+    data = _loads_embedded_json(stdout)
+    if not isinstance(data, dict):
+        return ()
+    issues = data.get("issues")
+    if not isinstance(issues, list):
+        return ()
+    flags: list[tuple[str, bool]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        for field, dev in (("dependencies", False), ("devDependencies", True)):
+            section = issue.get(field)
+            if not isinstance(section, list):
+                continue
+            for entry in section:
+                name = entry.get("name") if isinstance(entry, dict) else None
+                if isinstance(name, str) and name:
+                    flags.append((name, dev))
+    return tuple(flags)
 
 
 class NpmPackageManager:
@@ -191,3 +248,52 @@ class NpmPackageManager:
         )
         if code != 0:
             raise RuntimeError(f"npm install failed ({code}): {err or out}")
+
+    async def list_unused(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[Removal, ...]:
+        """Report each unused direct dependency via ``knip`` (static analysis).
+
+        Best-effort: ``knip`` exits non-zero precisely *because* it found
+        issues, so the exit code is ignored and stdout is parsed regardless;
+        crashed or empty output simply yields no removals. ``justification``
+        records the detector so the judge and the PR body can name it.
+        """
+        _, out, _ = await run_text(
+            "npx",
+            "--yes",
+            _KNIP_SPEC,
+            "--reporter",
+            "json",
+            "--no-progress",
+            cwd=workspace,
+        )
+        return tuple(
+            Removal(
+                package=name,
+                ecosystem=target.ecosystem,
+                dev=dev,
+                justification="unused (knip)",
+            )
+            for name, dev in parse_knip_unused(out)
+        )
+
+    async def remove_dependency(
+        self, removal: Removal, workspace: Path
+    ) -> None:
+        """Remove the dependency from package.json + lockfile (lockfile-only).
+
+        ``npm uninstall`` finds the dependency's section itself, so ``dev`` need
+        not be passed; ``--package-lock-only --ignore-scripts`` keeps it to a
+        manifest+lock rewrite with no ``node_modules`` and no scripts.
+        """
+        code, out, err = await run_text(
+            "npm",
+            "uninstall",
+            removal.package,
+            "--package-lock-only",
+            "--ignore-scripts",
+            cwd=workspace,
+        )
+        if code != 0:
+            raise RuntimeError(f"npm uninstall failed ({code}): {err or out}")

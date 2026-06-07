@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from froot.domain.candidate import Candidate
+    from froot.domain.removal import Removal
     from froot.domain.repo import TargetRepo
 
 _PYPI_JSON = "https://pypi.org/pypi"
@@ -283,6 +284,30 @@ class UvPackageManager:
                 case _:
                     continue
         return tuple(installed)
+
+    async def list_unused(
+        self, target: TargetRepo, workspace: Path
+    ) -> tuple[Removal, ...]:
+        """No uv dead-code signal yet — deferred to a sandboxed executor.
+
+        ``deptry`` needs the target's dependencies *installed* to map import
+        names to distribution names (e.g. ``pydantic_ai`` ->
+        ``pydantic-ai-slim``); run without them it is almost all false
+        positives. Installing them means running third-party code, which the
+        worker never does. So the uv arm waits on a sandbox (see VISION); until
+        then this yields nothing and the loop never proposes a uv removal.
+        """
+        del target, workspace  # intentionally unused — deferred (see docstring)
+        return ()
+
+    async def remove_dependency(
+        self, removal: Removal, workspace: Path
+    ) -> None:
+        """Unreachable until the uv signal lands; fail loudly if ever called."""
+        del removal, workspace  # intentionally unused — deferred
+        raise NotImplementedError(
+            "uv dead-code removal is deferred pending a sandboxed executor"
+        )
 
     async def apply_patch_bump(
         self, candidate: Candidate, workspace: Path
