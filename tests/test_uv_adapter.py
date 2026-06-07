@@ -84,6 +84,21 @@ async def test_list_unused_runs_deptry_in_sandbox_and_classifies(tmp_path):
     assert any("deptry" in s for s in sandbox.scripts)
 
 
+async def test_list_unused_degrades_when_sandbox_fails(tmp_path):
+    # An unconfigured/failing sandbox yields no removals, never an exception
+    # that would fail the scan — so the uv arm stays quiet until the key is set.
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+
+    class _BoomSandbox:
+        async def run(self, workdir, script, *, timeout_seconds=None):
+            raise RuntimeError("FROOT_E2B_API_KEY is unset")
+
+    removals = await UvPackageManager(sandbox=_BoomSandbox()).list_unused(
+        make_repo(ecosystem=Ecosystem.UV), tmp_path
+    )
+    assert removals == ()
+
+
 async def test_list_unused_no_manifest_yields_nothing(tmp_path):
     sandbox = FakeSandbox()
     removals = await UvPackageManager(sandbox=sandbox).list_unused(

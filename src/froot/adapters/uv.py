@@ -36,6 +36,7 @@ bumps, never a wrong one:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tomllib
 from typing import TYPE_CHECKING
@@ -54,6 +55,8 @@ if TYPE_CHECKING:
     from froot.domain.candidate import Candidate
     from froot.domain.repo import TargetRepo
     from froot.ports.protocols import Sandbox
+
+_log = logging.getLogger("froot.uv")
 
 _PYPI_JSON = "https://pypi.org/pypi"
 _TIMEOUT = 15.0
@@ -394,7 +397,18 @@ class UvPackageManager:
             return ()
         main, dev = parse_main_and_dev_dependencies(manifest.read_text())
         sandbox = self._sandbox or self._default_sandbox()
-        result = await sandbox.run(workspace, _DEPTRY_SCRIPT)
+        try:
+            result = await sandbox.run(workspace, _DEPTRY_SCRIPT)
+        except Exception as exc:
+            # Best-effort: an unconfigured (no FROOT_E2B_API_KEY) or failing
+            # sandbox yields no removals, never an exception that would fail the
+            # scan — so the uv arm simply stays quiet until the key is set.
+            _log.warning(
+                "uv dead-code sandbox unavailable for %s; skipping: %r",
+                target.repo.slug,
+                exc,
+            )
+            return ()
         removals: list[Removal] = []
         for name in parse_deptry_unused(result.stdout):
             normalized = normalize_name(name)

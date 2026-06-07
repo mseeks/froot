@@ -30,11 +30,11 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 
-# Runtime extras only (the model judge, GitHub/HTTP, OTEL) — not the dev tooling.
+# Runtime extras only (model judge, GitHub/HTTP, OTEL, e2b sandbox) — not dev.
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-editable \
-    --extra ai --extra github --extra otel
+    --extra ai --extra github --extra otel --extra sandbox
 
 # Default entrypoint: the worker. The scan starter runs as a one-shot via a
 # `command:` override (uv run --no-sync python -m froot.scan_starter).
