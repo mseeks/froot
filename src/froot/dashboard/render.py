@@ -1,10 +1,16 @@
 """Render the view model to one self-contained HTML page (pure).
 
-All CSS is inline, there is no JavaScript, and the page makes no network
-request of its own — it is a static projection of an already-computed
+All CSS is inline, there is no JavaScript (tabs are CSS-only, via hidden radio
+inputs), and the page makes no network request of its own — it is a static,
+full-screen projection of an already-computed
 :class:`~froot.dashboard.model.DashboardModel`. Every dynamic value is
-HTML-escaped at the boundary. The ordering is trust-first (is it alive → track
-record → oracle → judgment → the human's queue), so it reads top to bottom.
+HTML-escaped at the boundary.
+
+The shape is gate-first: each loop is a tab whose hero is the *gate* — a small
+flow of the four trust bearings into the earned/hold decision — over a compact
+metric grid and foldable detail. Each loop is a distinct trust class (§3.9), so
+each tab is the whole dashboard scoped to one loop; determinism-review and the
+cross-cutting run-telemetry get their own tabs.
 """
 
 from __future__ import annotations
@@ -18,81 +24,135 @@ if TYPE_CHECKING:
         BumpRow,
         ClassGate,
         DashboardModel,
-        ReviewLoop,
+        LoopView,
         ReviewRow,
         RunTelemetry,
-        ScanLoop,
     )
 
 _CSS = """
-:root{--fg:#1a1a1a;--mut:#6b6b6b;--line:#e4e4e4;--bg:#fff;--ok:#1a7f37;
---warn:#9a6700;--bad:#cf222e;--accent:#0969da;--card:#fafafa}
-@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--mut:#9a9a9a;
---line:#262626;--bg:#0d0d0d;--ok:#3fb950;--warn:#d29922;--bad:#f85149;
---accent:#58a6ff;--card:#141414}}
+:root{--fg:#13151a;--mut:#6b7280;--faint:#9aa1ac;--line:#e7e9ee;--bg:#fbfbfc;
+--panel:#fff;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--accent:#0969da;
+--accentbg:#ddf0ff;--chip:#f2f4f7;--node:#eef6ff}
+@media(prefers-color-scheme:dark){:root{--fg:#e8eaed;--mut:#9aa1ac;
+--faint:#6b7280;--line:#23262d;--bg:#0a0b0d;--panel:#121419;--ok:#3fb950;
+--warn:#d29922;--bad:#f85149;--accent:#58a6ff;--accentbg:#10263f;
+--chip:#1a1d24;--node:#10263f}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
-font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:820px;margin:0 auto;padding:34px 20px 72px}
-h1{font-size:22px;margin:0;letter-spacing:-.01em}
-.tag{color:var(--mut);margin:3px 0 0;font-size:13px}
-.meta{color:var(--mut);font-size:12px;margin:12px 0 0}
-.sources{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0 0;font-size:12px}
-section{margin:30px 0 0}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;
-color:var(--mut);margin:0 0 12px;font-weight:600;
-border-bottom:1px solid var(--line);padding-bottom:6px}
-.stats{display:flex;flex-wrap:wrap;gap:26px}
-.stat .n{font-size:26px;font-weight:600;line-height:1.1}
-.stat .l{color:var(--mut);font-size:12px;margin-top:2px}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;
-margin-right:7px}
-.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
-.dot.bad{background:var(--bad)}.dot.mute{background:var(--mut)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:6px 12px 6px 0;
-border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;
-letter-spacing:.04em}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+-webkit-font-smoothing:antialiased}
+main{padding:0 clamp(16px,3vw,44px) 64px}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-.row{display:flex;align-items:baseline;gap:8px;padding:4px 0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 .mut{color:var(--mut)}.ok{color:var(--ok)}.warn{color:var(--warn)}
 .bad{color:var(--bad)}
-.note{color:var(--mut);font-size:12px;margin:10px 0 0}
-footer{margin:44px 0 0;padding-top:16px;border-top:1px solid var(--line);
-color:var(--mut);font-size:12px;line-height:1.7}
+/* header */
+header{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 20px;
+padding:22px 0 16px;border-bottom:1px solid var(--line)}
+h1{font-size:19px;margin:0;letter-spacing:-.02em;font-weight:700}
+h1 .v{color:var(--faint);font-weight:400;font-size:13px;margin-left:8px}
+.hstatus{display:flex;align-items:center;gap:7px;font-size:13px}
+.hmeta{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px 16px;
+color:var(--mut);font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+.dot.bad{background:var(--bad)}.dot.mute{background:var(--faint)}
+/* tabs (CSS-only) */
+.tabin{position:absolute;opacity:0;pointer-events:none}
+nav.tabbar{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0 0;
+border-bottom:1px solid var(--line)}
+nav.tabbar label{display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+padding:9px 15px;font-size:13px;font-weight:600;color:var(--mut);
+border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+nav.tabbar label:hover{color:var(--fg)}
+nav.tabbar label .badge{font-weight:600;font-size:11px;color:var(--faint);
+background:var(--chip);border-radius:9px;padding:1px 7px}
+.panel{display:none;padding:22px 0 0;animation:fade .15s ease}
+@keyframes fade{from{opacity:.4}to{opacity:1}}
+/* gate hero */
+.hero{display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(280px,1fr);
+gap:18px 26px;align-items:start;margin:0 0 6px}
+@media(max-width:760px){.hero{grid-template-columns:1fr}}
+.heroh{font-size:11px;text-transform:uppercase;letter-spacing:.09em;
+color:var(--mut);font-weight:700;margin:0 0 12px}
+.gateflow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bearings{display:flex;flex-direction:column;gap:6px;min-width:150px}
+.bearing{display:flex;align-items:center;justify-content:space-between;gap:10px;
+background:var(--chip);border-radius:7px;padding:6px 10px;font-size:12px}
+.bearing .bl{color:var(--mut)}
+.bearing .bv{font-weight:600;font-variant-numeric:tabular-nums}
+.bearing.armed .bv{color:var(--faint);font-weight:500}
+.flowarrow{color:var(--faint);font-size:18px;line-height:1}
+.gatenode{flex:0 0 auto;text-align:center;border:2px solid var(--accent);
+background:var(--node);border-radius:12px;padding:12px 16px;min-width:96px}
+.gatenode .gl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+color:var(--accent);font-weight:700}
+.gatenode .gv{font-size:22px;font-weight:700;line-height:1.15;
+font-variant-numeric:tabular-nums}
+.gatenode .gs{font-size:11px;color:var(--mut)}
+.outcome{flex:0 0 auto;border-radius:10px;padding:11px 15px;text-align:center;
+border:1px solid var(--line)}
+.outcome .ot{font-size:15px;font-weight:700;letter-spacing:.01em}
+.outcome .os{font-size:11px;color:var(--mut);margin-top:1px}
+.outcome.act{background:color-mix(in srgb,var(--ok) 12%,transparent);
+border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.outcome.act .ot{color:var(--ok)}
+.outcome.hold .ot{color:var(--mut)}
+.caption{color:var(--mut);font-size:12px;margin:8px 0 0;line-height:1.45}
+/* class table inside the hero */
+.classes{width:100%;border-collapse:collapse;font-size:12.5px}
+.classes th,.classes td{text-align:left;padding:6px 10px 6px 0;
+border-bottom:1px solid var(--line);vertical-align:baseline}
+.classes th{color:var(--mut);font-weight:600;font-size:10.5px;
+text-transform:uppercase;letter-spacing:.05em}
+.classes td.r{font-variant-numeric:tabular-nums}
+.pill{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;
+padding:1px 9px}
+.pill.ok{color:var(--ok);
+background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.pill.hold{color:var(--mut);background:var(--chip)}
+/* metric cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+gap:10px;margin:22px 0 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:13px 15px}
+.card .n{font-size:24px;font-weight:700;line-height:1.05;
+font-variant-numeric:tabular-nums}
+.card .l{color:var(--mut);font-size:11.5px;margin-top:3px}
+.card .x{color:var(--faint);font-size:11px;margin-top:5px}
+/* section + detail */
+.sec{margin:26px 0 0}
+.sech{font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+color:var(--mut);font-weight:700;margin:0 0 10px;display:flex;
+align-items:baseline;gap:10px}
+.sech .n{color:var(--faint);font-weight:600;letter-spacing:0}
+details.fold{margin:18px 0 0;border:1px solid var(--line);border-radius:10px;
+background:var(--panel)}
+details.fold>summary{cursor:pointer;list-style:none;padding:11px 15px;
+font-size:12px;font-weight:600;color:var(--fg);display:flex;
+align-items:center;gap:9px}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"\\25B8";color:var(--faint);font-size:10px}
+details.fold[open]>summary::before{content:"\\25BE"}
+details.fold>summary .c{color:var(--faint);font-weight:600}
+details.fold .body{padding:0 15px 14px}
+table.data{width:100%;border-collapse:collapse;font-size:12.5px}
+table.data th,table.data td{text-align:left;padding:6px 12px 6px 0;
+border-bottom:1px solid var(--line);vertical-align:top}
+table.data th{color:var(--mut);font-weight:600;font-size:10.5px;
+text-transform:uppercase;letter-spacing:.04em}
+table.data td.r{font-variant-numeric:tabular-nums;white-space:nowrap}
+.empty{color:var(--mut);font-size:13px;padding:14px 0;border:1px dashed
+var(--line);border-radius:9px;text-align:center;background:var(--panel)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.t{font-size:11px;border-radius:6px;padding:1px 7px;background:var(--chip);
+color:var(--mut)}
+.t.ok{color:var(--ok)}.t.warn{color:var(--warn)}.t.bad{color:var(--bad)}
+.cad{color:var(--mut);font-size:12px;margin:14px 0 0}
+.cad b{color:var(--fg);font-weight:600}
+footer{margin:40px 0 0;padding-top:16px;border-top:1px solid var(--line);
+color:var(--mut);font-size:12px;line-height:1.65}
 footer b{color:var(--fg);font-weight:600}
-/* loop groups — collapsible (collapsed by default), two-level hierarchy */
-details.loop{margin:24px 0 0}
-summary.loophead{display:flex;align-items:baseline;gap:6px 12px;flex-wrap:wrap;
-cursor:pointer;list-style:none;margin:0;padding:0 0 7px;
-border-bottom:2px solid var(--fg)}
-summary.loophead::-webkit-details-marker{display:none}
-summary.loophead::before{content:"\\25B8";color:var(--mut);margin-right:5px;
-font-size:11px;position:relative;top:-1px}
-details.loop[open]>summary.loophead::before{content:"\\25BE"}
-summary.loophead h2{font-size:16px;text-transform:none;letter-spacing:-.01em;
-color:var(--fg);border:0;margin:0;padding:0;font-weight:700}
-summary.loophead .sub{color:var(--mut);font-size:12px}
-summary.loophead .glance{margin-left:auto;display:flex;flex-wrap:wrap;
-align-items:baseline;gap:3px 14px;font-size:12px;color:var(--mut)}
-summary.loophead .glance b{color:var(--fg);font-weight:600}
-/* the shared-infra group reads as not-a-loop: lighter, dashed, muted */
-details.loop.shared>summary.loophead{border-bottom:1px dashed var(--line)}
-details.loop.shared>summary.loophead h2{font-size:13px;color:var(--mut);
-font-weight:600;text-transform:uppercase;letter-spacing:.06em}
-/* subsections sit tighter inside a loop; the loop rule carries the weight */
-details.loop section{margin:18px 0 0}
-details.loop section>h2{border-bottom:0;padding-bottom:0;margin-bottom:9px}
-/* foldable framing — the MHE notes, one click away, so the page scans clean */
-details.why{margin:9px 0 0}
-details.why>summary{color:var(--accent);font-size:12px;cursor:pointer;
-list-style:none}
-details.why>summary::-webkit-details-marker{display:none}
-details.why>summary::before{content:"\\002b  why";font-weight:600}
-details.why[open]>summary::before{content:"\\2212  why"}
-details.why .note{margin:6px 0 0}
 """
 
 _CI_CLASS = {
@@ -108,631 +168,449 @@ _POST_MERGE_CLASS = {
     "reverted": "bad",
     "unknown": "mut",
 }
+_STATE_CLASS = {"merged": "ok", "closed": "mut", "open": "warn"}
+_FAIL_CLASS = {"failed": "bad", "terminated": "warn"}
 
 
+# ── small formatters ─────────────────────────────────────────────────────────
 def _aware(when: datetime) -> datetime:
-    """Treat a stray naive timestamp as UTC so arithmetic never raises."""
-    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
 def _ago(when: datetime | None, now: datetime) -> str:
-    """A compact 'time since' label (``6h ago``)."""
     if when is None:
         return "—"
     secs = (now - _aware(when)).total_seconds()
     if secs < 90:
         return "just now"
-    if secs < 5400:
-        return f"{int(secs // 60)}m ago"
-    if secs < 129600:
-        return f"{int(secs // 3600)}h ago"
-    return f"{int(secs // 86400)}d ago"
+    mins = secs / 60
+    if mins < 90:
+        return f"{round(mins)}m ago"
+    hours = mins / 60
+    if hours < 36:
+        return f"{round(hours)}h ago"
+    return f"{round(hours / 24)}d ago"
 
 
 def _until(when: datetime | None, now: datetime) -> str:
-    """A compact 'time until' label (``in 18h`` / ``due now``)."""
     if when is None:
         return "—"
     secs = (_aware(when) - now).total_seconds()
     if secs <= 0:
-        return "due now"
-    if secs < 5400:
-        return f"in {int(secs // 60)}m"
-    if secs < 129600:
-        return f"in {int(secs // 3600)}h"
-    return f"in {int(secs // 86400)}d"
+        return "due"
+    mins = secs / 60
+    if mins < 90:
+        return f"~{round(mins)}m"
+    hours = mins / 60
+    if hours < 36:
+        return f"~{round(hours)}h"
+    return f"~{round(hours / 24)}d"
+
+
+def _pct(rate: float | None) -> str:
+    return "—" if rate is None else f"{rate * 100:.0f}%"
 
 
 def _dot(kind: str) -> str:
-    """A status dot span (``ok`` / ``warn`` / ``bad`` / ``mute``)."""
     return f'<span class="dot {kind}"></span>'
 
 
 def _tag(value: str | None, classes: dict[str, str]) -> str:
-    """A small coloured label for a verdict/CI value, or an em-dash."""
     if value is None:
-        return '<span class="mut">—</span>'
-    cls = classes.get(value, "mut")
-    return f'<span class="{cls}">{escape(value)}</span>'
-
-
-def _stat(n: object, label: str) -> str:
-    return (
-        f'<div class="stat"><div class="n">{escape(str(n))}</div>'
-        f'<div class="l">{escape(label)}</div></div>'
-    )
-
-
-def _why(note_html: str) -> str:
-    """Fold a framing note behind a native ``<details>`` so the page scans."""
-    return f'<details class="why"><summary></summary>{note_html}</details>'
-
-
-def _glance(n: object, label: str) -> str:
-    """One at-a-glance item for a loop header (``<b>12</b> proposed``)."""
-    return f"<span><b>{escape(str(n))}</b> {escape(label)}</span>"
-
-
-def _header(model: DashboardModel) -> str:
-    now = model.generated_at
-    repos = ", ".join(model.repos_configured) or "none configured"
-    dots = "".join(
-        f"<span>{_dot('ok' if s.ok else 'bad')}"
-        f'{escape(s.name)} <span class="mut">{escape(s.detail)}</span></span>'
-        for s in model.sources
-    )
-    stamp = now.strftime("%Y-%m-%d %H:%M UTC")
-    return (
-        "<header>"
-        "<h1>froot</h1>"
-        '<p class="tag">durable maintenance loops &middot; '
-        "reputation read-model</p>"
-        f'<p class="meta">watching <span class="mono">{escape(repos)}</span>'
-        f" &middot; generated {escape(stamp)} &middot; "
-        "derived live, stored nowhere</p>"
-        f'<div class="sources">{dots}</div>'
-        "</header>"
-    )
-
-
-def _heartbeat(model: DashboardModel) -> str:
-    now = model.generated_at
-    interval = model.scan_interval_seconds
-
-    def line(loop: ScanLoop) -> str:
-        if loop.live:
-            dot, tail = "ok", ""
-            if loop.last_tick is not None:
-                nxt = _aware(loop.last_tick) + timedelta(seconds=interval)
-                last = _ago(loop.last_tick, now)
-                tail = (
-                    f' <span class="mut">&middot; last {last}'
-                    f" &middot; next {_until(nxt, now)}</span>"
-                )
-        else:
-            dot = "bad" if loop.status in ("terminated", "none") else "warn"
-            tail = f' <span class="mut">&middot; {escape(loop.status)}</span>'
-        return (
-            f'<div class="row">{_dot(dot)}'
-            f'<span class="mono">{escape(loop.repo)}</span>'
-            f' <span class="mut">{escape(loop.loop)}</span>{tail}</div>'
-        )
-
-    if not model.scan_loops:
-        body = '<p class="note">No repos configured (FROOT_REPOS unset).</p>'
-    else:
-        body = "".join(line(loop) for loop in model.scan_loops)
-    return f"<section><h2>Is it alive?</h2>{body}</section>"
-
-
-def _track_record(model: DashboardModel) -> str:
-    t = model.track_record
-    rate = "—" if t.merge_rate is None else f"{t.merge_rate * 100:.0f}%"
-    ttm = (
-        "—"
-        if t.median_ttm_minutes is None
-        else f"{t.median_ttm_minutes:.0f} min"
-    )
-    stats = "".join(
-        (
-            _stat(t.opened, "proposed"),
-            _stat(t.merged, "merged"),
-            _stat(t.open_now, "awaiting"),
-            _stat(t.closed_unmerged, "closed"),
-            _stat(rate, "merge rate"),
-            _stat(ttm, "median time-to-merge"),
-        )
-    )
-    note = (
-        '<p class="note">Merge rate is the Stage-1 signal &mdash; narrow to '
-        "npm patch bumps by construction. It counts a human merge, not a "
-        "confirmed good outcome: revert tracking is a later loop, so merge is "
-        "not yet proof of success.</p>"
-    )
-    return (
-        "<section><h2>Track record &middot; the reputation</h2>"
-        f'<div class="stats">{stats}</div>{_why(note)}</section>'
-    )
-
-
-def _rate_cell(rate: float | None) -> str:
-    """A class's approval rate as a percent, or an em-dash if none decided."""
-    if rate is None:
-        return '<span class="mut">—</span>'
-    return f"{rate * 100:.0f}%"
-
-
-def _earned_cell(g: ClassGate) -> str:
-    """A class's gate standing: a green 'earned', else the muted blocker.
-
-    A model change resets the record (§3.7), which can read as a mysterious drop
-    to zero; when prior-environment history exists, it is named so the reset is
-    legible rather than alarming.
-    """
-    reset = (
-        f' <span class="mut">&middot; reset: {g.prior_env_decided} under a '
-        "prior env</span>"
-        if g.prior_env_decided
-        else ""
-    )
-    if g.earned:
-        return f'{_dot("ok")}<span class="ok">earned</span>{reset}'
-    blocker = escape(g.blocker or "not earned")
-    return f'{_dot("mut")}<span class="mut">{blocker}</span>{reset}'
-
-
-def _budget_cell(g: ClassGate) -> str:
-    """The gate in steward-time: approvals/week now &rarr; reclaimable/week."""
-    return (
-        f'<span class="mono">{g.approvals_per_week:.1f}</span> appr'
-        f' <span class="mut">&rarr; {g.reclaim_per_week:.1f} reclaimable</span>'
-    )
-
-
-def _defect_cell(g: ClassGate) -> str:
-    """The post-merge defect bearing: rate over confirmed-held outcomes."""
-    if g.determined == 0:
-        return '<span class="mut">— (0 confirmed)</span>'
-    rate = g.defect_rate if g.defect_rate is not None else 0.0
-    cls = "ok" if g.defects == 0 else "bad"
-    return (
-        f'<span class="{cls}">{rate * 100:.0f}%</span>'
-        f' <span class="mut">({g.defects}/{g.determined})</span>'
-    )
-
-
-def _class_gates(model: DashboardModel) -> str:
-    """The earned-autonomy panel — the gate's per-class standing.
-
-    Renders whether each (repo, loop) class has earned its gate move (the two
-    record bearings: rate + defect rate) and the steward-budget that move
-    reclaims. On an allowlisted repo a met gate auto-merges; elsewhere — the
-    default — it is the advisory shadow gate a steward watches.
-    """
-    gates = model.class_gates
-    if not gates:
-        body = (
-            '<p class="note">No classes yet &mdash; a (repo, loop) earns a '
-            "gate move from its own track record.</p>"
-        )
-    else:
-        rows = "".join(
-            "<tr>"
-            f'<td class="mono">{escape(g.repo)}</td>'
-            f'<td class="mut">{escape(g.loop)}</td>'
-            f"<td>{g.decided} in {g.window_days}d</td>"
-            f"<td>{_rate_cell(g.merge_rate)}</td>"
-            f"<td>{_defect_cell(g)}</td>"
-            f"<td>{_earned_cell(g)}</td>"
-            f"<td>{_budget_cell(g)}</td>"
-            "</tr>"
-            for g in gates
-        )
-        body = (
-            "<table><thead><tr><th>repo</th><th>loop</th><th>decided</th>"
-            "<th>rate</th><th>defect</th><th>gate</th><th>budget / week</th>"
-            "</tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-    note = (
-        '<p class="note">Each <b>class</b> is one loop on one repo &mdash; a '
-        "distinct trust unit (a security patch is not a version bump, and they "
-        "never share a record). A class earns its gate by <b>triangulation</b> "
-        "(&sect;3.8): a high enough <b>approval rate</b> over enough "
-        "recently-<b>decided</b> PRs <i>and</i> a low <b>defect rate</b> over "
-        "enough confirmed-held merges &mdash; two bearings that fail "
-        "differently (the rate to rubber-stamping, the defect rate to a weak "
-        "oracle), so they can&rsquo;t both lie at once. The window keeps trust "
-        "recent. <b>Budget</b> reads the gate in steward-time: approvals/week "
-        "the class costs now &rarr; the reclaimable slice a move hands back. "
-        "Two further legs guard the live merge beyond this panel: an "
-        "<b>adversarial gate self-test</b> (a known-bad class must never be "
-        "granted) and an <b>independent deep review</b> of each bump at merge. "
-        "Where a repo is <b>allowlisted</b> a met gate auto-merges; the "
-        "allowlist is empty by default &mdash; the revocable switch &mdash; so "
-        "elsewhere this stays advisory.</p>"
-    )
-    return (
-        "<section><h2>Earned autonomy &middot; the gate</h2>"
-        f"{body}{_why(note)}</section>"
-    )
-
-
-def _verification(model: DashboardModel) -> str:
-    v = model.verification
-    stats = "".join(
-        (
-            _stat(v.passed, "CI passed"),
-            _stat(v.failed, "CI failed"),
-            _stat(v.absent, "no checks"),
-            _stat(v.timed_out, "timed out"),
-            _stat(v.unknown, "unknown"),
-        )
-    )
-    if v.with_reading == 0:
-        note = '<p class="note">No CI readings yet.</p>'
-    else:
-        note = _why(
-            f'<p class="note">A real oracle reported on '
-            f"<b>{v.oracle_existed}</b> of {v.with_reading} bumps with a "
-            'reading. <span class="mut">&lsquo;no checks&rsquo; means CI was '
-            "absent &mdash; not a pass; never conflated.</span>"
-            "</p>"
-        )
-    return (
-        "<section><h2>Verification &middot; CI is the oracle</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
-    )
-
-
-def _reliability(model: DashboardModel) -> str:
-    r = model.reliability
-    rate = "—" if r.defect_rate is None else f"{r.defect_rate * 100:.0f}%"
-    stats = "".join(
-        (
-            _stat(r.held, "held"),
-            _stat(r.broke, "broke"),
-            _stat(r.reverted, "reverted"),
-            _stat(r.unverified, "unverified"),
-            _stat(rate, "defect rate"),
-        )
-    )
-    if r.determined == 0:
-        note = (
-            '<p class="note">No post-merge outcomes determined yet '
-            f"(last {r.window_days}d). A merge is only a *success* once it "
-            "holds; until then it&rsquo;s just merged.</p>"
-        )
-    else:
-        note = _why(
-            '<p class="note">Did the merge <b>hold</b>? &mdash; the outcome '
-            "leg, the only bearing that watches what actually shipped. "
-            f"<b>{r.determined}</b> of the recent merges were classifiable; "
-            "the defect rate is a <b>floor</b>, not the truth: it sees the "
-            "branch&rsquo;s CI and git-reverts, but a <i>manual</i> or "
-            "<i>bundled</i> revert (most of them) is invisible. "
-            '<span class="mut">&lsquo;unverified&rsquo; means no branch '
-            "oracle &mdash; never counted as held.</span></p>"
-        )
-    return (
-        "<section><h2>Reliability &middot; did the merge hold?</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
-    )
-
-
-def _probes(model: DashboardModel) -> str:
-    p = model.probes
-    stats = "".join(
-        (
-            _stat(p.caught, "caught"),
-            _stat(p.escaped, "escaped"),
-            _stat(p.pending, "pending"),
-        )
-    )
-    if p.total == 0:
-        note = (
-            '<p class="note">No adversarial probes yet. A <b>canary</b> '
-            "&mdash; a deliberately-bad bump &mdash; tests whether the "
-            "guardrail still bites; it needs no volume to be informative, so "
-            "it carries weight while the rate-based bearings are thin "
-            "(&sect;2.11).</p>"
-        )
-    elif p.escaped:
-        note = (
-            f'<p class="note"><span class="bad">&#9888; <b>{p.escaped}</b> '
-            "canary(s) <b>escaped</b> &mdash; a known-bad bump landed, so the "
-            "guardrail has a hole.</span> This is the alarm the probe exists "
-            "to raise.</p>"
-        )
-    else:
-        note = _why(
-            '<p class="note">Every canary was <b>caught</b> &mdash; the '
-            "guardrail refused the planted bad bumps. Probes are scored on a "
-            "strict bar (a canary must never merge) and kept <b>out</b> of the "
-            "track record and defect rate, so a synthetic failure never "
-            "pollutes the real bearings.</p>"
-        )
-    return (
-        "<section><h2>Adversarial probes &middot; does the guardrail bite?</h2>"
-        f'<div class="stats">{stats}</div>{note}</section>'
-    )
-
-
-def _judgment(model: DashboardModel) -> str:
-    j = model.judgment
-    stats = "".join(
-        (
-            _stat(j.clean, "clean"),
-            _stat(j.risky, "risky"),
-            _stat(j.unknown, "unknown"),
-            _stat(j.none, "no verdict"),
-        )
-    )
-    if j.clean_but_failed or j.flagged_but_passed:
-        note = (
-            f'<p class="note">Calibration: <b>{j.clean_but_failed}</b> '
-            "&lsquo;clean&rsquo; bumps whose CI failed, "
-            f"<b>{j.flagged_but_passed}</b> flagged bumps whose CI passed.</p>"
-        )
-    else:
-        note = (
-            '<p class="note">The model&rsquo;s only job is the changelog '
-            "verdict; the spine proposes the bump either way.</p>"
-        )
-    return (
-        "<section><h2>Model judgment &middot; the one model call</h2>"
-        f'<div class="stats">{stats}</div>{_why(note)}</section>'
-    )
-
-
-def _shadow_badge(row: BumpRow) -> str:
-    """Whether this open PR meets its class's auto-merge grant.
-
-    These PRs are still open, so on an allowlisted repo a met grant would
-    already have merged: a green 'would auto-merge' here means the grant is met
-    but the repo is not allowlisted (or a deeper check held it), so it is still
-    yours. Otherwise the first blocker, muted — the held reason to fix.
-    """
-    if row.would_auto_merge:
-        return '<span class="ok">would auto-merge</span>'
-    reason = row.held_reason or "held"
-    return f'<span class="mut">held &middot; {escape(reason)}</span>'
-
-
-def _gate(model: DashboardModel) -> str:
-    now = model.generated_at
-    if not model.gate:
-        body = '<p class="note">Queue empty &mdash; nothing awaiting you.</p>'
-    else:
-        rows = "".join(
-            "<tr>"
-            f'<td class="mono">{escape(row.package)}</td>'
-            f"<td>{escape(_ago(row.opened_at, now))}</td>"
-            f"<td>{_shadow_badge(row)}</td>"
-            f"<td>{_pr_link(row)}</td>"
-            "</tr>"
-            for row in model.gate
-        )
-        note = _why(
-            '<p class="note">These PRs are open and <b>yours</b>. A green '
-            "&lsquo;would auto-merge&rsquo; means this PR met its "
-            "class&rsquo;s grant &mdash; on an allowlisted repo the loop would "
-            "have merged it already, so its presence here means the repo is "
-            "not allowlisted (or a deeper check held it). The verdict rests on "
-            "the single CI "
-            "oracle and a merge-rate record, which (esp. for a security patch) "
-            "is not the same as a confirmed-good or security-reviewed outcome. "
-            "You own every open merge.</p>"
-        )
-        body = (
-            "<table><thead><tr><th>package</th><th>waiting</th>"
-            "<th>shadow gate</th><th>pr</th>"
-            f"</tr></thead><tbody>{rows}</tbody></table>{note}"
-        )
-    return (
-        "<section><h2>Approval gate &middot; what a human owns</h2>"
-        f"{body}</section>"
-    )
-
-
-def _bumps(model: DashboardModel) -> str:
-    now = model.generated_at
-    if not model.bumps:
-        body = '<p class="note">No bumps proposed yet.</p>'
-    else:
-        rows = "".join(
-            "<tr>"
-            f'<td class="mono">{escape(row.package)}</td>'
-            f'<td class="mono mut">{escape(row.from_version or "?")} &rarr; '
-            f"{escape(row.to_version)}</td>"
-            f"<td>{_tag(row.verdict, _VERDICT_CLASS)}</td>"
-            f"<td>{_tag(row.ci, _CI_CLASS)}</td>"
-            f"<td>{_state_tag(row.state)}</td>"
-            f"<td>{_tag(row.post_merge, _POST_MERGE_CLASS)}</td>"
-            f'<td class="mut">{escape(_ago(row.opened_at, now))}</td>'
-            f"<td>{_pr_link(row)}</td>"
-            "</tr>"
-            for row in model.bumps
-        )
-        body = (
-            "<table><thead><tr><th>package</th><th>bump</th><th>verdict</th>"
-            "<th>ci</th><th>state</th><th>held?</th><th>opened</th><th>pr</th>"
-            "</tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-    return f"<section><h2>Bumps &middot; the detail</h2>{body}</section>"
-
-
-def _failures(model: DashboardModel) -> str:
-    if not model.failures:
-        return ""
-    now = model.generated_at
-    rows = "".join(
-        "<tr>"
-        f'<td class="mono">{escape(_short_id(f.workflow_id))}</td>'
-        f"<td>{_state_tag(f.kind)}</td>"
-        f'<td class="mut">{escape(f.reason or "—")}</td>'
-        f'<td class="mut">{escape(_ago(f.when, now))}</td>'
-        "</tr>"
-        for f in model.failures
-    )
-    return (
-        "<section><h2>Failures &middot; where the loop did not close</h2>"
-        "<table><thead><tr><th>bump</th><th>kind</th><th>reason</th>"
-        f"<th>when</th></tr></thead><tbody>{rows}</tbody></table></section>"
-    )
-
-
-def _telem_glance(model: DashboardModel) -> str:
-    """The telemetry group's at-a-glance (or an ``unavailable`` marker)."""
-    t = model.telemetry
-    if not t.available:
-        return '<span class="mut">unavailable</span>'
-    return _glance(t.total_spans, f"spans / {t.window_days}d")
-
-
-def _telemetry(model: DashboardModel) -> str:
-    """The telemetry body — header lives in the shared loop group above it."""
-    t: RunTelemetry = model.telemetry
-    if not t.available:
-        return (
-            "<section>"
-            '<p class="note">Unavailable (not configured or unreachable). '
-            "GitHub + Temporal carry the dashboard regardless.</p></section>"
-        )
-    now = model.generated_at
-    if t.activities:
-        rows = "".join(
-            "<tr>"
-            f'<td class="mono">{escape(a.name)}</td>'
-            f"<td>{a.count}</td>"
-            f'<td class="mut">{a.avg_ms:.0f} ms</td>'
-            f'<td class="mut">{a.max_ms:.0f} ms</td>'
-            "</tr>"
-            for a in t.activities
-        )
-        table = (
-            "<table><thead><tr><th>activity</th><th>runs</th><th>avg</th>"
-            f"<th>max</th></tr></thead><tbody>{rows}</tbody></table>"
-        )
-    else:
-        table = '<p class="note">No froot spans in the window.</p>'
-    summary = (
-        f'<p class="note">{t.total_spans} spans &middot; '
-        f"{t.error_spans} errored &middot; last activity "
-        f"{escape(_ago(t.last_activity, now))} &middot; "
-        f"{t.window_days}-day window.</p>"
-    )
-    return f"<section>{summary}{table}</section>"
-
-
-def _review_heartbeat(model: DashboardModel) -> str:
-    now = model.generated_at
-    interval = model.review_interval_seconds
-
-    def line(loop: ReviewLoop) -> str:
-        if loop.live:
-            dot, tail = "ok", ""
-            if loop.last_tick is not None:
-                nxt = _aware(loop.last_tick) + timedelta(seconds=interval)
-                last = _ago(loop.last_tick, now)
-                tail = (
-                    f' <span class="mut">&middot; last {last}'
-                    f" &middot; next {_until(nxt, now)}</span>"
-                )
-        else:
-            dot = "bad" if loop.status in ("terminated", "none") else "warn"
-            tail = f' <span class="mut">&middot; {escape(loop.status)}</span>'
-        return (
-            f'<div class="row">{_dot(dot)}'
-            f'<span class="mono">{escape(loop.repo)}</span>{tail}</div>'
-        )
-
-    if not model.review_loops:
-        body = (
-            '<p class="note">No determinism-review loops running '
-            "(the transitive ring watches the @workflow.defn repos).</p>"
-        )
-    else:
-        body = "".join(line(loop) for loop in model.review_loops)
-    return f"<section><h2>Is it alive?</h2>{body}</section>"
-
-
-def _review_record(model: DashboardModel) -> str:
-    r = model.review_record
-    stats = "".join(
-        (
-            _stat(r.reviewed, "reviewed"),
-            _stat(r.flagged, "flagged"),
-            _stat(r.clean, "clean"),
-            _stat(r.hazards, "hazards"),
-            _stat(r.repos_covered, "repos covered"),
-        )
-    )
-    note = (
-        '<p class="note">The transitive ring: it chases first-party helper '
-        "calls out of each workflow to catch a hazard the lexical CI kernel "
-        "can&rsquo;t see. <b>Advisory</b> &mdash; the blocking gate stays the "
-        "kernel&rsquo;s CI check. The hazard-resolved rate (was a flag gone on "
-        "a later commit?) is a later loop; it needs accumulated history.</p>"
-    )
-    return (
-        "<section><h2>Track record &middot; the reputation</h2>"
-        f'<div class="stats">{stats}</div>{_why(note)}</section>'
-    )
-
-
-def _reviews(model: DashboardModel) -> str:
-    now = model.generated_at
-    if not model.reviews:
-        body = '<p class="note">No PRs reviewed yet.</p>'
-    else:
-        rows = "".join(
-            "<tr>"
-            f'<td class="mono">{escape(row.repo)}</td>'
-            f"<td>{_review_pr_link(row)}</td>"
-            f'<td class="mono mut">{escape((row.head_sha or "")[:7]) or "—"}'
-            "</td>"
-            f"<td>{_findings_cell(row)}</td>"
-            f'<td class="mut">{escape(_ago(row.reviewed_at, now))}</td>'
-            "</tr>"
-            for row in model.reviews
-        )
-        body = (
-            "<table><thead><tr><th>repo</th><th>pr</th><th>head</th>"
-            "<th>findings</th><th>reviewed</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-    return f"<section><h2>Reviews &middot; the detail</h2>{body}</section>"
-
-
-def _footer() -> str:
-    return (
-        "<footer>"
-        "<b>Authority envelope.</b> froot holds <b>write authority</b> "
-        "everywhere (it opens PRs) and conditional <b>merge authority</b> "
-        "only on an allowlisted repo where the class has earned its gate "
-        "&mdash; the allowlist is empty by default, so commit authority is "
-        "none until a steward opts a repo in. Trust, when granted, is earned, "
-        "narrow to a single loop on a single repo (a version bump is not a "
-        "security patch; they never share a record), conditional on its "
-        "environment (judge "
-        '<span class="mono">gemma4:12b</span>, lockfile-only regen), revocable '
-        "(the allowlist), and time-expiring. A met gate auto-merges only "
-        "after passing an independent deep review; everywhere not allowlisted "
-        "the same verdict is the advisory <b>shadow gate</b> a steward "
-        "watches.<br>"
-        "Everything above is derived on this request from GitHub (outcomes) + "
-        "Temporal (runs) + ClickHouse (telemetry). froot keeps no database; "
-        "reload to recompute."
-        "</footer>"
-    )
+        return '<span class="t">—</span>'
+    cls = classes.get(value, "")
+    return f'<span class="t {cls}">{escape(value)}</span>'
 
 
 def _pr_link(row: BumpRow) -> str:
     if row.pr_url is None or row.pr_number is None:
         return '<span class="mut">—</span>'
     return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
+
+
+def _short_id(workflow_id: str) -> str:
+    return escape(workflow_id.removeprefix("froot-bump-"))
+
+
+# ── header ───────────────────────────────────────────────────────────────────
+def _alive(model: DashboardModel) -> tuple[str, str]:
+    """Global liveness dot + label across every loop."""
+    live = sum(1 for x in model.scan_loops if x.live) + sum(
+        1 for x in model.review_loops if x.live
+    )
+    total = len(model.scan_loops) + len(model.review_loops)
+    if total == 0:
+        return "mute", "no loops configured"
+    kind = "ok" if live == total else ("warn" if live else "bad")
+    return kind, f"{live}/{total} loops live"
+
+
+def _header(model: DashboardModel) -> str:
+    kind, label = _alive(model)
+    sources = " ".join(
+        f"{_dot('ok' if s.ok else 'bad')}{escape(s.name)}"
+        for s in model.sources
+    )
+    return (
+        "<header>"
+        '<h1>froot<span class="v mono">gemma4:12b</span></h1>'
+        f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
+        f'<span class="hmeta"><span>{sources}</span>'
+        f"<span>{len(model.repos_configured)} repos</span>"
+        f"<span>built {_ago(model.generated_at, model.generated_at)}"
+        " · reload to recompute</span></span>"
+        "</header>"
+    )
+
+
+# ── the gate hero (per loop) ─────────────────────────────────────────────────
+def _bearing(label: str, value: str, kind: str, *, armed: bool = False) -> str:
+    cls = "bearing armed" if armed else "bearing"
+    return (
+        f'<div class="{cls}"><span class="bl">{escape(label)}</span>'
+        f'<span class="bv {kind}">{escape(value)}</span></div>'
+    )
+
+
+def _gate_hero(view: LoopView) -> str:
+    t, rel, pr = view.track_record, view.reliability, view.probes
+    earned = sum(1 for g in view.class_gates if g.earned)
+    total = len(view.class_gates)
+    acting = any(r.would_auto_merge for r in view.gate)
+    # The four bearings: rate + defect come from the record; the adversarial
+    # probe (canary) is the loop's escaped-count; the deep review runs per-PR at
+    # the merge, so it is shown armed (always-on), not a record figure.
+    rate_ok = "ok" if (t.merge_rate or 0) >= 0.95 else "warn"
+    defect_ok = "ok" if not rel.defect_rate else "bad"
+    probe_ok = "ok" if pr.escaped == 0 else "bad"
+    bearings = "".join(
+        (
+            _bearing(
+                "approval rate",
+                _pct(t.merge_rate),
+                rate_ok if t.merge_rate is not None else "mut",
+            ),
+            _bearing(
+                "defect rate",
+                _pct(rel.defect_rate),
+                defect_ok if rel.defect_rate is not None else "mut",
+            ),
+            _bearing(
+                "probe",
+                f"{pr.escaped} escaped" if pr.total else "none",
+                probe_ok if pr.total else "mut",
+            ),
+            _bearing("deep review", "armed", "mut", armed=True),
+        )
+    )
+    if total == 0:
+        node = (
+            '<div class="gatenode"><div class="gl">gate</div>'
+            '<div class="gv">—</div><div class="gs">no class yet</div></div>'
+        )
+    else:
+        node = (
+            f'<div class="gatenode"><div class="gl">earned</div>'
+            f'<div class="gv">{earned}/{total}</div>'
+            '<div class="gs">classes</div></div>'
+        )
+    if acting:
+        out = (
+            '<div class="outcome act"><div class="ot">AUTO-MERGE</div>'
+            '<div class="os">a class is acting now</div></div>'
+        )
+    elif earned:
+        out = (
+            '<div class="outcome act"><div class="ot">EARNED</div>'
+            '<div class="os">acts where allowlisted</div></div>'
+        )
+    else:
+        out = (
+            '<div class="outcome hold"><div class="ot">HOLD</div>'
+            '<div class="os">building the record</div></div>'
+        )
+    flow = (
+        '<div class="gateflow">'
+        f'<div class="bearings">{bearings}</div>'
+        '<div class="flowarrow">&rarr;</div>'
+        f"{node}"
+        '<div class="flowarrow">&rarr;</div>'
+        f"{out}</div>"
+    )
+    caption = (
+        '<p class="caption">A class earns the gate by triangulation: a high '
+        "<b>approval rate</b> and a low <b>defect rate</b>, over enough "
+        "evidence. Two further legs guard the live merge — an adversarial "
+        "<b>probe</b> and an independent <b>deep review</b> at merge. "
+        "Auto-merge is allowlist-gated (off by default).</p>"
+    )
+    return (
+        '<div><div class="heroh">Earned autonomy &middot; the gate</div>'
+        f"{flow}{caption}</div>"
+    )
+
+
+def _class_table(view: LoopView) -> str:
+    if not view.class_gates:
+        return (
+            '<div><div class="heroh">Classes</div>'
+            '<div class="empty">No classes yet &mdash; a (repo, loop) '
+            "earns the gate from its own track record.</div></div>"
+        )
+    rows = "".join(_class_row(g) for g in view.class_gates)
+    return (
+        '<div><div class="heroh">Per-class standing</div>'
+        '<table class="classes"><thead><tr><th>repo</th><th>rate</th>'
+        "<th>defect</th><th>gate</th><th>budget/wk</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
+    )
+
+
+def _class_row(g: ClassGate) -> str:
+    if g.earned:
+        gate = '<span class="pill ok">earned</span>'
+    else:
+        gate = (
+            f'<span class="pill hold">hold</span> '
+            f'<span class="mut">{escape(g.blocker or "")}</span>'
+        )
+    defect = "—" if g.defect_rate is None else _pct(g.defect_rate)
+    budget = (
+        f"{g.reclaim_per_week:.1f}/{g.approvals_per_week:.1f}"
+        if g.approvals_per_week
+        else "—"
+    )
+    return (
+        f'<tr><td class="mono">{escape(g.repo)}</td>'
+        f'<td class="r">{_pct(g.merge_rate)}</td>'
+        f'<td class="r">{escape(defect)}</td>'
+        f"<td>{gate}</td>"
+        f'<td class="r mut">{escape(budget)}</td></tr>'
+    )
+
+
+# ── metric cards (per loop) ──────────────────────────────────────────────────
+def _card(n: object, label: str, extra: str = "", kind: str = "") -> str:
+    x = f'<div class="x">{extra}</div>' if extra else ""
+    return (
+        f'<div class="card"><div class="n {kind}">{escape(str(n))}</div>'
+        f'<div class="l">{escape(label)}</div>{x}</div>'
+    )
+
+
+def _loop_cards(view: LoopView) -> str:
+    t, v, rel, j, pr = (
+        view.track_record,
+        view.verification,
+        view.reliability,
+        view.judgment,
+        view.probes,
+    )
+    defects = rel.broke + rel.reverted
+    cards = [
+        _card(
+            t.opened,
+            "proposed",
+            f"{t.merged} merged · {t.closed_unmerged} closed",
+        ),
+        _card(_pct(t.merge_rate), "approval rate", "the first bearing"),
+        _card(
+            t.open_now,
+            "awaiting you",
+            "open, needs a human",
+            "warn" if t.open_now else "",
+        ),
+        _card(
+            _pct(rel.defect_rate) if rel.determined else "—",
+            "defect rate",
+            f"{rel.held} held · {defects} broke",
+            "bad" if defects else "",
+        ),
+        _card(
+            f"{v.passed}/{v.oracle_existed}" if v.oracle_existed else "—",
+            "CI passed",
+            "the oracle",
+        ),
+        _card(
+            pr.escaped if pr.total else "0",
+            "probes escaped",
+            f"{pr.caught} caught" if pr.total else "no probes yet",
+            "bad" if pr.escaped else "",
+        ),
+        _card(
+            j.clean,
+            "clean verdicts",
+            f"{j.clean_but_failed} mis-judged"
+            if j.clean_but_failed
+            else "judge calibrated",
+        ),
+        _card(rel.held, "merges held", "post-merge, stayed green"),
+    ]
+    return f'<div class="cards">{"".join(cards)}</div>'
+
+
+# ── detail tables ────────────────────────────────────────────────────────────
+def _cadence(view: LoopView, now: datetime) -> str:
+    live = sum(1 for s in view.scan_loops if s.live)
+    total = len(view.scan_loops)
+    nxt = ""
+    last = max(
+        (s.last_tick for s in view.scan_loops if s.last_tick is not None),
+        default=None,
+    )
+    if last is not None:
+        due = last + timedelta(seconds=view.scan_interval_seconds)
+        nxt = f" &middot; next {escape(_until(due, now))}"
+    every = round(view.scan_interval_seconds / 3600, 1)
+    return (
+        f'<p class="cad">Scan loop &middot; <b>{live}/{total}</b> live '
+        f"&middot; every <b>{every}h</b>{nxt}</p>"
+    )
+
+
+def _bumps_fold(view: LoopView) -> str:
+    if not view.bumps:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f'<td class="mono">{escape(r.package)}</td>'
+        f'<td class="mono mut">{escape(r.to_version)}</td>'
+        f"<td>{_tag(r.state, _STATE_CLASS)}</td>"
+        f"<td>{_tag(r.verdict, _VERDICT_CLASS)}</td>"
+        f"<td>{_tag(r.ci, _CI_CLASS)}</td>"
+        f"<td>{_tag(r.post_merge, _POST_MERGE_CLASS)}</td>"
+        f"<td>{_pr_link(r)}</td>"
+        "</tr>"
+        for r in view.bumps
+    )
+    return (
+        '<details class="fold"><summary>Bumps '
+        f'<span class="c">{len(view.bumps)}</span></summary><div class="body">'
+        '<table class="data"><thead><tr><th>package</th><th>&rarr;</th>'
+        "<th>state</th><th>verdict</th><th>ci</th><th>post-merge</th>"
+        "<th>pr</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div></details>"
+    )
+
+
+def _failures_fold(view: LoopView) -> str:
+    if not view.failures:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f'<td class="mono">{_short_id(f.workflow_id)}</td>'
+        f"<td>{_tag(f.kind, _FAIL_CLASS)}</td>"
+        f'<td class="mut">{escape(f.reason or "—")}</td>'
+        "</tr>"
+        for f in view.failures
+    )
+    return (
+        '<details class="fold"><summary class="bad">Failures '
+        f'<span class="c">{len(view.failures)}</span></summary>'
+        '<div class="body"><table class="data"><thead><tr><th>bump</th>'
+        "<th>kind</th><th>reason</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div></details>"
+    )
+
+
+# ── panels ───────────────────────────────────────────────────────────────────
+def _loop_panel(view: LoopView, pid: str, now: datetime) -> str:
+    queue = _queue_sec(view)
+    return (
+        f'<section class="panel" id="{pid}">'
+        f'<div class="hero">{_gate_hero(view)}{_class_table(view)}</div>'
+        f"{_loop_cards(view)}"
+        f"{queue}"
+        f"{_cadence(view, now)}"
+        f"{_bumps_fold(view)}{_failures_fold(view)}"
+        "</section>"
+    )
+
+
+def _queue_sec(view: LoopView) -> str:
+    if not view.gate:
+        return (
+            '<div class="sec"><div class="sech">Approval queue '
+            '<span class="n">empty</span></div>'
+            '<div class="empty">Nothing awaiting you.</div></div>'
+        )
+    rows = "".join(
+        "<tr>"
+        f'<td class="mono">{escape(r.package)}</td>'
+        f'<td class="mono mut">{escape(r.to_version)}</td>'
+        f"<td>{_queue_badge(r)}</td>"
+        f"<td>{_pr_link(r)}</td>"
+        "</tr>"
+        for r in view.gate
+    )
+    return (
+        '<div class="sec"><div class="sech">Approval queue '
+        f'<span class="n">{len(view.gate)} yours</span></div>'
+        '<table class="data"><thead><tr><th>package</th><th>&rarr;</th>'
+        "<th>gate</th><th>pr</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
+    )
+
+
+def _queue_badge(row: BumpRow) -> str:
+    if row.would_auto_merge:
+        return '<span class="pill ok">would auto-merge</span>'
+    reason = row.held_reason or "held"
+    return f'<span class="mut">held &middot; {escape(reason)}</span>'
+
+
+def _review_panel(model: DashboardModel, pid: str) -> str:
+    r = model.review_record
+    live = sum(1 for x in model.review_loops if x.live)
+    haz = "bad" if r.hazards else ""
+    cards = (
+        '<div class="cards">'
+        f"{_card(r.repos_covered, 'repos covered')}"
+        f"{_card(f'{live}/{len(model.review_loops)}', 'loops live')}"
+        f"{_card(r.reviewed, 'reviewed', f'{r.flagged} flagged')}"
+        f"{_card(r.hazards, 'hazards', 'transitive', haz)}"
+        "</div>"
+    )
+    body = (
+        '<div class="empty">No PRs reviewed yet.</div>'
+        if not model.reviews
+        else _reviews_table(model.reviews)
+    )
+    note = (
+        '<p class="caption">The transitive ring — advisory. It '
+        "re-derives each open PR's reachable determinism hazards and "
+        "comments; it never blocks a merge.</p>"
+    )
+    every = round(model.review_interval_seconds / 60, 1)
+    cad = (
+        f'<p class="cad">Review loop &middot; <b>{live}</b> live &middot; '
+        f"every <b>{every}m</b></p>"
+    )
+    return (
+        f'<section class="panel" id="{pid}">'
+        '<div class="heroh">Determinism review &middot; the transitive ring'
+        f"</div>{note}{cards}{cad}"
+        f'<div class="sec"><div class="sech">Reviews '
+        f'<span class="n">{len(model.reviews)}</span></div>{body}</div>'
+        "</section>"
+    )
+
+
+def _reviews_table(reviews: tuple[ReviewRow, ...]) -> str:
+    rows = "".join(
+        "<tr>"
+        f'<td class="mono">{escape(row.repo)}</td>'
+        f"<td>{_review_pr_link(row)}</td>"
+        f"<td>{_findings_cell(row)}</td>"
+        f'<td class="mono mut">{escape(", ".join(row.rules) or "—")}</td>'
+        "</tr>"
+        for row in reviews
+    )
+    return (
+        '<table class="data"><thead><tr><th>repo</th><th>pr</th>'
+        "<th>findings</th><th>rules</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
 
 
 def _review_pr_link(row: ReviewRow) -> str:
@@ -742,142 +620,144 @@ def _review_pr_link(row: ReviewRow) -> str:
 
 
 def _findings_cell(row: ReviewRow) -> str:
-    """A review's findings: 'clean', or the hazard count + rules + comment."""
     if row.findings == 0:
         return '<span class="ok">clean</span>'
-    rules = (
-        f' <span class="mono mut">{escape(", ".join(row.rules))}</span>'
-        if row.rules
-        else ""
-    )
-    comment = (
-        f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
-        if row.comment_url
-        else ""
-    )
-    noun = "hazard" if row.findings == 1 else "hazards"
-    return f'<span class="bad">{row.findings} {noun}</span>{rules}{comment}'
+    label = "hazard" if row.findings == 1 else "hazards"
+    link = ""
+    if row.comment_url:
+        link = f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
+    return f'<span class="bad">{row.findings} {label}</span>{link}'
 
 
-def _state_tag(state: str) -> str:
-    cls = {
-        "merged": "ok",
-        "open": "warn",
-        "closed": "mut",
-        "terminated": "bad",
-        "failed": "bad",
-        "timed_out": "bad",
-        "canceled": "warn",
-    }.get(state, "mut")
-    return f'<span class="{cls}">{escape(state)}</span>'
-
-
-def _short_id(workflow_id: str) -> str:
-    """Drop the ``froot-bump-`` prefix for a readable failures row."""
-    return workflow_id.removeprefix("froot-bump-")
-
-
-def _dep_glance(model: DashboardModel) -> str:
-    """The dependency-patch loop's at-a-glance, shown in its header."""
-    t = model.track_record
-    live = sum(1 for loop in model.scan_loops if loop.live)
-    total = len(model.scan_loops)
-    rate = "—" if t.merge_rate is None else f"{t.merge_rate * 100:.0f}%"
-    items = [
-        _glance(f"{live}/{total}", "live"),
-        _glance(t.opened, "proposed"),
-        _glance(rate, "merged"),
-    ]
-    if model.class_gates:
-        earned = sum(1 for g in model.class_gates if g.earned)
-        items.append(_glance(f"{earned}/{len(model.class_gates)}", "earned"))
-    if t.open_now:
-        items.append(_glance(t.open_now, "awaiting you"))
-    return "".join(items)
-
-
-def _det_glance(model: DashboardModel) -> str:
-    """The determinism-review loop's at-a-glance, shown in its header."""
-    r = model.review_record
-    return "".join(
-        (
-            _glance(r.repos_covered, "repos"),
-            _glance(r.reviewed, "reviewed"),
-            _glance(r.hazards, "hazards"),
+def _telemetry_panel(model: DashboardModel, pid: str, now: datetime) -> str:
+    tel: RunTelemetry = model.telemetry
+    if not tel.available:
+        body = (
+            '<div class="empty">Unavailable &mdash; ClickHouse off or no '
+            "froot traces in the window.</div>"
         )
+    else:
+        rows = "".join(
+            "<tr>"
+            f'<td class="mono">{escape(a.name)}</td>'
+            f'<td class="r">{a.count}</td>'
+            f'<td class="r">{a.avg_ms:.0f} ms</td>'
+            f'<td class="r mut">{a.max_ms:.0f} ms</td>'
+            "</tr>"
+            for a in tel.activities
+        )
+        last = f"last {_ago(tel.last_activity, now)}"
+        err = "bad" if tel.error_spans else ""
+        head = (
+            '<div class="cards">'
+            f"{_card(tel.total_spans, 'spans', last)}"
+            f"{_card(tel.error_spans, 'errors', 'in the window', err)}"
+            f"{_card(f'{tel.window_days}d', 'window')}</div>"
+        )
+        table = (
+            '<div class="sec"><div class="sech">Activity latency</div>'
+            '<table class="data"><thead><tr><th>activity</th><th>runs</th>'
+            "<th>avg</th><th>max</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>"
+        )
+        body = head + table
+    note = (
+        '<p class="caption">Cross-cutting run telemetry from ClickHouse '
+        "(trace-derived, best-effort) — latency per activity across "
+        "every loop.</p>"
+    )
+    return (
+        f'<section class="panel" id="{pid}">'
+        '<div class="heroh">Run telemetry &middot; ClickHouse</div>'
+        f"{note}{body}</section>"
     )
 
 
-def _loop(
-    title: str,
-    sub: str,
-    glance: str,
-    sections: tuple[str, ...],
-    *,
-    shared: bool = False,
-) -> str:
-    """A collapsible group: a prominent header + at-a-glance, collapsed.
-
-    The header (with its at-a-glance) is the ``<summary>``, so a collapsed group
-    still shows the headline; expanding reveals the subsections. ``shared`` is a
-    non-loop infra group (telemetry) with a lighter, distinct header.
-    """
-    cls = "loop shared" if shared else "loop"
-    head = (
-        '<summary class="loophead">'
-        f"<h2>{escape(title)}</h2>"
-        f'<span class="sub">{sub}</span>'
-        f'<span class="glance">{glance}</span>'
-        "</summary>"
-    )
-    return f'<details class="{cls}">{head}{"".join(sections)}</details>'
+# ── tabs + page ──────────────────────────────────────────────────────────────
+def _loop_badge(view: LoopView) -> str:
+    earned = sum(1 for g in view.class_gates if g.earned)
+    if view.class_gates and earned:
+        return f"{earned}/{len(view.class_gates)} earned"
+    if view.track_record.open_now:
+        return f"{view.track_record.open_now} open"
+    return str(view.track_record.opened)
 
 
 def page(model: DashboardModel) -> str:
     """Render the whole dashboard as one self-contained HTML document."""
-    parts = (
-        _header(model),
-        _loop(
-            "Dependency-patch",
-            "npm + uv &middot; scan &rarr; bump &rarr; CI &rarr; merge",
-            _dep_glance(model),
+    now = model.generated_at
+    # (tab-id, panel-id, label, badge, panel-html)
+    tabs: list[tuple[str, str, str, str, str]] = []
+    for i, view in enumerate(model.bump_loops):
+        pid, tid = f"panel-{i}", f"tab-{i}"
+        tabs.append(
             (
-                _heartbeat(model),
-                _track_record(model),
-                _class_gates(model),
-                _verification(model),
-                _reliability(model),
-                _probes(model),
-                _judgment(model),
-                _gate(model),
-                _bumps(model),
-                _failures(model),
-            ),
-        ),
-        _loop(
+                tid,
+                pid,
+                view.title,
+                _loop_badge(view),
+                _loop_panel(view, pid, now),
+            )
+        )
+    tabs.append(
+        (
+            "tab-det",
+            "panel-det",
             "Determinism review",
-            "the transitive ring &middot; advisory",
-            _det_glance(model),
-            (
-                _review_heartbeat(model),
-                _review_record(model),
-                _reviews(model),
-            ),
-        ),
-        _loop(
-            "Run telemetry",
-            "ClickHouse &middot; trace-derived, best-effort",
-            _telem_glance(model),
-            (_telemetry(model),),
-            shared=True,
-        ),
-        _footer(),
+            str(model.review_record.reviewed),
+            _review_panel(model, "panel-det"),
+        )
     )
+    tabs.append(
+        (
+            "tab-tel",
+            "panel-tel",
+            "Telemetry",
+            "live" if model.telemetry.available else "off",
+            _telemetry_panel(model, "panel-tel", now),
+        )
+    )
+
+    inputs, labels, panels, rules = [], [], [], []
+    for idx, (tid, pid, label, badge, panel) in enumerate(tabs):
+        checked = " checked" if idx == 0 else ""
+        inputs.append(
+            f'<input class="tabin" type="radio" name="tab" id="{tid}"{checked}>'
+        )
+        labels.append(
+            f'<label for="{tid}">{escape(label)}'
+            f'<span class="badge">{escape(badge)}</span></label>'
+        )
+        panels.append(panel)
+        rules.append(f"#{tid}:checked~main #{pid}{{display:block}}")
+        rules.append(
+            f"#{tid}:checked~main nav.tabbar label[for={tid}]"
+            "{color:var(--fg);border-bottom-color:var(--accent)}"
+        )
+    tabcss = "".join(rules)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         "<title>froot &middot; read-model</title>"
-        f"<style>{_CSS}</style></head><body><main>"
-        + "".join(parts)
+        f"<style>{_CSS}{tabcss}</style></head><body>"
+        + "".join(inputs)
+        + "<main>"
+        + _header(model)
+        + f'<nav class="tabbar">{"".join(labels)}</nav>'
+        + "".join(panels)
+        + _footer()
         + "</main></body></html>"
+    )
+
+
+def _footer() -> str:
+    return (
+        "<footer><b>Authority envelope.</b> froot opens PRs everywhere and "
+        "auto-merges only on an allowlisted repo where a class has earned its "
+        "gate (the allowlist is empty by default, so commit authority is none "
+        "until a steward opts in). Trust is earned, narrow to one loop on one "
+        "repo, conditional on its environment "
+        '(<span class="mono">gemma4:12b</span>), revocable, and time-expiring. '
+        "Everything here is derived per request from GitHub + Temporal + "
+        "ClickHouse; froot keeps no database.</footer>"
     )
