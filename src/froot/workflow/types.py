@@ -10,13 +10,13 @@ from __future__ import annotations
 from pydantic import Field
 
 from froot.domain.base import Frozen
-from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.determinism import FrontierItem, ReviewFinding
 from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.repo import TargetRepo
+from froot.domain.work import WorkItem
 
 # One day, in seconds — the default scan cadence (weekly/daily is plenty).
 _DEFAULT_INTERVAL_SECONDS = 86_400
@@ -95,7 +95,7 @@ class BumpParams(Frozen):
     """
 
     target: TargetRepo
-    candidate: Candidate
+    candidate: WorkItem
     close_on_red: bool = True
     loop: Loop = Loop.DEPENDENCY_PATCH
 
@@ -103,7 +103,7 @@ class BumpParams(Frozen):
 class JudgeInput(Frozen):
     """Input to the changelog-judge activity (candidate + which loop asks)."""
 
-    candidate: Candidate
+    candidate: WorkItem
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
@@ -114,7 +114,7 @@ class GateReviewInput(Frozen):
     loop frames the adversarial prompt just as the first judge pass is framed.
     """
 
-    candidate: Candidate
+    candidate: WorkItem
     pr: PullRequestRef
     loop: Loop = Loop.DEPENDENCY_PATCH
 
@@ -123,7 +123,7 @@ class OpenPrInput(Frozen):
     """Input to the open-pull-request activity."""
 
     target: TargetRepo
-    candidate: Candidate
+    candidate: WorkItem
     verdict: ChangelogVerdict
     loop: Loop = Loop.DEPENDENCY_PATCH
 
@@ -184,7 +184,7 @@ class DispatchInput(Frozen):
     """Input to the dispatch-bump activity (start a bump loop)."""
 
     target: TargetRepo
-    candidate: Candidate
+    candidate: WorkItem
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 

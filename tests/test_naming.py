@@ -7,7 +7,7 @@ from froot.policy.naming import (
     bump_workflow_id,
     scan_workflow_id,
 )
-from tests.support import make_candidate, make_repo
+from tests.support import make_candidate, make_removal, make_repo
 
 
 def test_security_loop_namespaces_branches_and_ids():
@@ -80,4 +80,40 @@ def test_workflow_ids_deterministic():
 def test_scan_id_distinct_per_repo():
     assert scan_workflow_id(make_repo("a/b")) != scan_workflow_id(
         make_repo("a/c")
+    )
+
+
+def test_removal_names_use_unused_tail():
+    # A removal carries no version, so its branch/id tail is "-unused" rather
+    # than "-<target>" — the discriminating behavior the work-item widening
+    # adds. Naming is loop-agnostic, so the default loop exercises it (the
+    # dead-code loop that will own removals lands in a later slice).
+    repo = make_repo("acme/widgets")
+    removal = make_removal(package="left-pad")
+    assert branch_name(removal).value == (
+        "froot/dependency-patch/left-pad-unused"
+    )
+    assert bump_workflow_id(repo, removal) == (
+        "froot-bump-acme-widgets-left-pad-unused"
+    )
+
+
+def test_removal_names_sanitize_scoped_package():
+    removal = make_removal(package="@scope/pkg")
+    assert branch_name(removal).value == (
+        "froot/dependency-patch/scope-pkg-unused"
+    )
+
+
+def test_bump_names_unchanged_by_work_item_widening():
+    # Regression: widening Candidate -> WorkItem must leave a bump's names
+    # byte-for-byte what they were, so a running bump loop is never orphaned.
+    repo = make_repo("acme/widgets")
+    candidate = make_candidate(package="left-pad", target="1.4.3")
+    assert branch_name(candidate).value == (
+        "froot/dependency-patch/left-pad-1.4.3"
+    )
+    assert (
+        bump_workflow_id(repo, candidate)
+        == "froot-bump-acme-widgets-left-pad-1.4.3"
     )

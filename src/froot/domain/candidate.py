@@ -12,7 +12,7 @@ clears) to the PR body and the judge, without any other loop having to care.
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -24,7 +24,13 @@ from froot.domain.version import Version
 class Candidate(Frozen):
     """A proposed upgrade of a single dependency.
 
+    One of the loop's work-item *kinds* (the other is
+    :class:`~froot.domain.removal.Removal`); ``kind`` is the discriminator the
+    chassis uses to route a work item to the right signal/judge/action without a
+    loop having to special-case the spine.
+
     Attributes:
+        kind: The work-item discriminator — always ``"bump"`` for a candidate.
         package: The dependency's name (e.g. ``"left-pad"`` or a scoped
             ``"@scope/pkg"``).
         ecosystem: The package manager the dependency belongs to.
@@ -36,6 +42,7 @@ class Candidate(Frozen):
             itself, as a patch does.
     """
 
+    kind: Literal["bump"] = "bump"
     package: str = Field(min_length=1)
     ecosystem: Ecosystem
     current: Version

@@ -10,14 +10,16 @@ scan loop's id is a per-repo singleton for the same reason.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
+from froot.domain.candidate import Candidate
 from froot.domain.loop import Loop
 from froot.domain.pull_request import BranchName
+from froot.domain.removal import Removal
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import Candidate
     from froot.domain.repo import TargetRepo
+    from froot.domain.work import WorkItem
 
 # Anything outside the safe set collapses to a single hyphen.
 _UNSAFE = re.compile(r"[^a-z0-9._-]+")
@@ -26,6 +28,16 @@ _UNSAFE = re.compile(r"[^a-z0-9._-]+")
 def _slug(text: str) -> str:
     """Lowercase and reduce ref/id-unsafe runs to single hyphens."""
     return _UNSAFE.sub("-", text.lower()).strip("-")
+
+
+def _branch_tail(item: WorkItem) -> str:
+    """The branch-name tail identifying a work item within its loop."""
+    match item:
+        case Candidate():
+            return f"{_slug(item.package)}-{item.target}"
+        case Removal():
+            return f"{_slug(item.package)}-unused"
+    assert_never(item)
 
 
 def _loop_id_segment(loop: Loop) -> tuple[str, ...]:
@@ -39,16 +51,15 @@ def _loop_id_segment(loop: Loop) -> tuple[str, ...]:
 
 
 def branch_name(
-    candidate: Candidate, loop: Loop = Loop.DEPENDENCY_PATCH
+    item: WorkItem, loop: Loop = Loop.DEPENDENCY_PATCH
 ) -> BranchName:
-    """The deterministic head branch for a bump (also the PR dedup key).
+    """The deterministic head branch for a work item (also the PR dedup key).
 
     Namespaced by loop (``froot/<loop>/…``) so two loops never push the same
-    branch even when they target the same package and version.
+    branch even when they touch the same package; a bump's tail is
+    ``<pkg>-<target>``, a removal's is ``<pkg>-unused``.
     """
-    return BranchName(
-        value=f"froot/{loop.value}/{_slug(candidate.package)}-{candidate.target}"
-    )
+    return BranchName(value=f"froot/{loop.value}/{_branch_tail(item)}")
 
 
 def branch_package_prefix(
@@ -66,17 +77,28 @@ def branch_package_prefix(
 
 
 def bump_workflow_id(
-    repo: TargetRepo, candidate: Candidate, loop: Loop = Loop.DEPENDENCY_PATCH
+    repo: TargetRepo, item: WorkItem, loop: Loop = Loop.DEPENDENCY_PATCH
 ) -> str:
-    """The deterministic per-bump workflow id (the dispatch dedup key)."""
+    """The deterministic per-work-item workflow id (the dispatch dedup key).
+
+    A bump keeps its historical ``…-<pkg>-<target>`` tail byte-for-byte (so a
+    running dependency-patch loop is never orphaned on deploy); a removal uses
+    ``…-<pkg>-unused``.
+    """
+    match item:
+        case Candidate():
+            tail = (_slug(item.package), _slug(str(item.target)))
+        case Removal():
+            tail = (_slug(item.package), "unused")
+        case _:
+            assert_never(item)
     return "-".join(
         (
             "froot-bump",
             *_loop_id_segment(loop),
             _slug(repo.repo.owner),
             _slug(repo.repo.name),
-            _slug(candidate.package),
-            _slug(str(candidate.target)),
+            *tail,
         )
     )
 

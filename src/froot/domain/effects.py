@@ -15,24 +15,24 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from froot.domain.base import Frozen
-from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.outcome import LoopOutcome
 from froot.domain.pull_request import PullRequestRef
+from froot.domain.work import WorkItem
 
 
 class JudgeChangelog(Frozen):
     """Fetch the candidate's changelog and get the model's typed verdict."""
 
     kind: Literal["judge_changelog"] = "judge_changelog"
-    candidate: Candidate
+    candidate: WorkItem
 
 
 class OpenPullRequest(Frozen):
     """Regenerate manifest+lockfile and open (idempotently) the bump's PR."""
 
     kind: Literal["open_pull_request"] = "open_pull_request"
-    candidate: Candidate
+    candidate: WorkItem
     verdict: ChangelogVerdict
 
 
@@ -69,7 +69,7 @@ class ReviewBump(Frozen):
     """
 
     kind: Literal["review_bump"] = "review_bump"
-    candidate: Candidate
+    candidate: WorkItem
     pr: PullRequestRef
 
 

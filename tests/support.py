@@ -28,6 +28,7 @@ from froot.domain.pull_request import (
     PullRequestDraft,
     PullRequestRef,
 )
+from froot.domain.removal import Removal
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.domain.version import Version
 from froot.result import unwrap
@@ -51,6 +52,20 @@ def make_candidate(
         ecosystem=ecosystem,
         current=ver(current),
         target=ver(target),
+    )
+
+
+def make_removal(
+    package: str = "left-pad",
+    ecosystem: Ecosystem = Ecosystem.NPM,
+    dev: bool = False,
+    justification: str | None = "unused (knip)",
+) -> Removal:
+    return Removal(
+        package=package,
+        ecosystem=ecosystem,
+        dev=dev,
+        justification=justification,
     )
 
 

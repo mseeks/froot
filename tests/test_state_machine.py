@@ -33,7 +33,7 @@ from froot.domain.state import (
     Recorded,
 )
 from froot.policy.state_machine import TransitionKind, advance, start
-from tests.support import make_candidate, make_pr
+from tests.support import make_candidate, make_pr, make_removal
 
 _VERDICT = CleanVerdict(rationale="patch only")
 
@@ -44,6 +44,27 @@ def test_start_enters_discovered_and_judges():
     assert isinstance(transition.next, Discovered)
     assert len(transition.effects) == 1
     assert isinstance(transition.effects[0], JudgeChangelog)
+
+
+def test_removal_flows_through_the_spine_unchanged():
+    # The work-item widening: a non-bump kind (a removal, no version) rides the
+    # same pure spine. The machine never inspects the payload — it carries the
+    # removal through start -> judge -> PR -> CI -> record untouched.
+    removal = make_removal(package="left-pad")
+    pr = make_pr()
+
+    transition = start(removal)
+    assert isinstance(transition.next, Discovered)
+    assert transition.next.candidate is removal
+    judge = transition.effects[0]
+    assert isinstance(judge, JudgeChangelog)
+    assert judge.candidate is removal
+
+    transition = advance(transition.next, ChangelogJudged(verdict=_VERDICT))
+    transition = advance(transition.next, PullRequestReady(pr=pr))
+    transition = advance(transition.next, CiResolved(status=CIPassed()))
+    assert isinstance(transition.next, Recorded)
+    assert transition.next.outcome.candidate is removal
 
 
 def test_happy_path_drives_to_recorded():

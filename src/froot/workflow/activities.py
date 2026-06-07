@@ -53,6 +53,7 @@ from froot.workflow.types import (
 )
 
 if TYPE_CHECKING:
+    from froot.domain.work import WorkItem
     from froot.ports.protocols import PackageManager
 
 _log = logging.getLogger("froot.outcome")
@@ -65,6 +66,23 @@ _gate_log = logging.getLogger("froot.gate")
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
     """The directory the manifest lives in (a monorepo subdir, or the root)."""
     return workspace / target.manifest_dir if target.manifest_dir else workspace
+
+
+def _bump(item: WorkItem) -> Candidate:
+    """Narrow a work item to a dependency bump at the activity boundary.
+
+    The bump activities — the changelog judge/review, the manifest edit, the
+    version telemetry — are defined only over a :class:`Candidate`. Only bumps
+    reach them today, so this makes that explicit and type-safe: a stray
+    non-bump raises rather than passing silently. When the dead-code action
+    lands, the impure boundary dispatches on ``item.kind`` at these sites
+    instead of narrowing (the pure spine already carries the generic work item).
+    """
+    if not isinstance(item, Candidate):
+        raise TypeError(
+            f"bump activity received a {item.kind} work item, not a bump"
+        )
+    return item
 
 
 async def _select_candidates(
@@ -181,7 +199,7 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
-    changelog = await HttpChangelogSource().fetch(params.candidate)
+    changelog = await HttpChangelogSource().fetch(_bump(params.candidate))
     if changelog is None:
         return UnknownVerdict(rationale="No changelog could be fetched.")
     try:
@@ -212,7 +230,7 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
-    changelog = await HttpChangelogSource().fetch(params.candidate)
+    changelog = await HttpChangelogSource().fetch(_bump(params.candidate))
     if changelog is None:
         verdict: ChangelogVerdict = UnknownVerdict(
             rationale="No changelog to review; holding (fail-closed)."
@@ -259,14 +277,15 @@ async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
     existing = await forge.find_open_pull_request(params.target, branch)
     if existing is not None:
         return existing
+    candidate = _bump(params.candidate)
     draft = pull_request_draft(
-        params.target, params.candidate, params.verdict, params.loop
+        params.target, candidate, params.verdict, params.loop
     )
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(params.target, workspace)
         await package_manager.apply_patch_bump(
-            params.candidate, _manifest_dir(params.target, workspace)
+            candidate, _manifest_dir(params.target, workspace)
         )
         await forge.push_branch(workspace, branch, draft.title)
     return await forge.open_pull_request(params.target, draft)
@@ -293,6 +312,7 @@ async def record_outcome(params: RecordInput) -> None:
     from froot.policy.environment import env_label
 
     outcome = params.outcome
+    bump = _bump(outcome.candidate)
     labels = (
         *pr_labels(params.loop),
         env_label(ModelSettings().ollama_model),
@@ -304,9 +324,9 @@ async def record_outcome(params: RecordInput) -> None:
                 "event": "loop_outcome",
                 "loop": params.loop.value,
                 "repo": params.target.repo.slug,
-                "package": outcome.candidate.package,
-                "from": str(outcome.candidate.current),
-                "to": str(outcome.candidate.target),
+                "package": bump.package,
+                "from": str(bump.current),
+                "to": str(bump.target),
                 "changelog": outcome.verdict.kind,
                 "ci": outcome.ci.kind,
                 "ci_passed": outcome.ci_passed,

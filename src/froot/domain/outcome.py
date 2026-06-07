@@ -11,10 +11,10 @@ external truths — GitHub and ClickStack.
 from __future__ import annotations
 
 from froot.domain.base import Frozen
-from froot.domain.candidate import Candidate
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.ci import CIPassed, TerminalCIStatus
 from froot.domain.pull_request import PullRequestRef
+from froot.domain.work import WorkItem
 
 
 class LoopOutcome(Frozen):
@@ -28,7 +28,7 @@ class LoopOutcome(Frozen):
             a still-pending status is not assignable here.
     """
 
-    candidate: Candidate
+    candidate: WorkItem
     verdict: ChangelogVerdict
     pr: PullRequestRef
     ci: TerminalCIStatus

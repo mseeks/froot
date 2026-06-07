@@ -47,6 +47,7 @@ from tests.support import (
     make_candidate,
     make_installed,
     make_pr,
+    make_removal,
     make_repo,
     make_upgrade,
     ver,
@@ -168,6 +169,14 @@ async def test_judge_changelog_unknown_when_missing(
         JudgeInput(candidate=make_candidate())
     )
     assert isinstance(verdict, UnknownVerdict)
+
+
+async def test_bump_only_activity_rejects_a_removal():
+    # The bump activities narrow WorkItem -> Candidate at the boundary; a
+    # removal reaching one fails fast rather than passing silently, until the
+    # dead-code action lands and the boundary dispatches on kind instead.
+    with pytest.raises(TypeError, match="not a bump"):
+        await activities.judge_changelog(JudgeInput(candidate=make_removal()))
 
 
 async def test_judge_changelog_uses_model(monkeypatch: pytest.MonkeyPatch):
