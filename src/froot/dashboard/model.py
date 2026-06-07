@@ -389,6 +389,46 @@ class ReviewRecord(Frozen):
     repos_covered: int
 
 
+class LoopView(Frozen):
+    """One bump loop's complete standing — the same treatment for every loop.
+
+    dependency-patch and security-patch are distinct trust classes (§3.9) that
+    never share a record, so each gets its own self-contained view: its gate and
+    four bearings, its queue, its detail. Built by partitioning the bump rows by
+    loop and running the same aggregates the combined view uses, so a loop's tab
+    is exactly the combined dashboard scoped to that one loop.
+
+    Attributes:
+        loop: The loop key (``dependency-patch`` / ``security-patch``).
+        title: The human title for the tab.
+        scan_loops: Liveness of this loop's per-repo scan schedules.
+        scan_interval_seconds: This loop's scan cadence (telemetry-in-context).
+        track_record: This loop's reputation headline.
+        class_gates: This loop's per-repo earned-autonomy standing (the gate).
+        verification: This loop's CI-oracle breakdown.
+        reliability: This loop's post-merge outcome leg.
+        probes: This loop's adversarial canary tally.
+        judgment: This loop's model-verdict mix and calibration.
+        gate: This loop's open PRs awaiting a human, freshest last.
+        bumps: This loop's proposed bumps, newest first.
+        failures: This loop's bump loops that did not close.
+    """
+
+    loop: str
+    title: str
+    scan_loops: tuple[ScanLoop, ...]
+    scan_interval_seconds: int
+    track_record: TrackRecord
+    class_gates: tuple[ClassGate, ...]
+    verification: Verification
+    reliability: Reliability
+    probes: Probes
+    judgment: Judgment
+    gate: tuple[BumpRow, ...]
+    bumps: tuple[BumpRow, ...]
+    failures: tuple[Failure, ...]
+
+
 class DashboardModel(Frozen):
     """The whole 10,000ft view, fully derived and ready to render.
 
@@ -412,6 +452,9 @@ class DashboardModel(Frozen):
         review_record: The determinism reviewer's headline.
         reviews: Every per-PR determinism review, newest first.
         telemetry: Trace-derived run telemetry (best-effort).
+        bump_loops: One self-contained view per bump loop — the per-loop tabs.
+            The top-level bump aggregates above are the combined ("all loops")
+            view; these split it per trust class.
     """
 
     generated_at: datetime
@@ -433,3 +476,4 @@ class DashboardModel(Frozen):
     review_record: ReviewRecord
     reviews: tuple[ReviewRow, ...]
     telemetry: RunTelemetry
+    bump_loops: tuple[LoopView, ...] = ()

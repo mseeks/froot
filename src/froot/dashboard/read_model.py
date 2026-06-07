@@ -19,6 +19,7 @@ from froot.dashboard.model import (
     DashboardModel,
     Failure,
     Judgment,
+    LoopView,
     Probes,
     Reliability,
     ReviewLoop,
@@ -491,6 +492,79 @@ def _failures(bumps: tuple[BumpExecution, ...]) -> tuple[Failure, ...]:
     return tuple(failures)
 
 
+def _loop_title(loop: Loop) -> str:
+    """The human tab title for a loop key (``dependency-patch`` -> ...)."""
+    return loop.value.capitalize()
+
+
+def _failure_loop(workflow_id: str, loops: tuple[Loop, ...]) -> Loop | None:
+    """Which loop a failed bump belongs to, from its workflow id.
+
+    Non-default loops carry their name as an id segment
+    (``froot-bump-security-patch-…``); dependency-patch is segmentless
+    (``froot-bump-…``), so it is the fallback once the specific loops miss.
+    """
+    for loop in loops:
+        if loop is not Loop.DEPENDENCY_PATCH and workflow_id.startswith(
+            f"froot-bump-{loop.value}-"
+        ):
+            return loop
+    if workflow_id.startswith("froot-bump-"):
+        return next(
+            (loop for loop in loops if loop is Loop.DEPENDENCY_PATCH), None
+        )
+    return None
+
+
+def _bump_loops(
+    now: datetime,
+    rows: tuple[BumpRow, ...],
+    canary_rows: tuple[BumpRow, ...],
+    failures: tuple[Failure, ...],
+    scans: tuple[ScanExecution, ...],
+    repos: tuple[str, ...],
+    loops: tuple[Loop, ...],
+    policy: AutonomyPolicy,
+    environment: str,
+    scan_interval_seconds: int,
+    reliability_window_days: int,
+) -> tuple[LoopView, ...]:
+    """One self-contained :class:`LoopView` per loop — the per-loop tabs.
+
+    Partitions the already-computed bump rows by loop and runs the very same
+    aggregates the combined view uses, so each loop's tab is the whole dashboard
+    scoped to one trust class (§3.9). Failures are attributed by workflow id.
+    """
+    views: list[LoopView] = []
+    for loop in loops:
+        loop_rows = tuple(r for r in rows if r.loop == loop.value)
+        loop_canary = tuple(r for r in canary_rows if r.loop == loop.value)
+        loop_gates = _class_gates(
+            now, loop_rows, repos, (loop,), policy, environment
+        )
+        loop_failures = tuple(
+            f for f in failures if _failure_loop(f.workflow_id, loops) is loop
+        )
+        views.append(
+            LoopView(
+                loop=loop.value,
+                title=_loop_title(loop),
+                scan_loops=_scan_loops(repos, (loop,), scans),
+                scan_interval_seconds=scan_interval_seconds,
+                track_record=_track_record(loop_rows),
+                class_gates=loop_gates,
+                verification=_verification(loop_rows),
+                reliability=_reliability(loop_rows, reliability_window_days),
+                probes=_probes(loop_canary),
+                judgment=_judgment(loop_rows),
+                gate=_gate(loop_rows, loop_gates, policy),
+                bumps=loop_rows,
+                failures=loop_failures,
+            )
+        )
+    return tuple(views)
+
+
 def _review_id(repo: str) -> str | None:
     """The deterministic review-loop id for an ``owner/name`` slug, if valid."""
     match RepoRef.parse(repo):
@@ -671,6 +745,20 @@ def assemble(
     canary_rows = tuple(r for r in all_rows if is_canary(r.to_version))
     rows = tuple(r for r in all_rows if not is_canary(r.to_version))
     class_gates = _class_gates(now, rows, repos, loops, policy, environment)
+    all_failures = _failures(bumps)
+    bump_loops = _bump_loops(
+        now,
+        rows,
+        canary_rows,
+        all_failures,
+        scans,
+        repos,
+        loops,
+        policy,
+        environment,
+        scan_interval_seconds,
+        reliability_window_days,
+    )
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
     return DashboardModel(
@@ -694,10 +782,11 @@ def assemble(
         judgment=_judgment(rows),
         gate=_gate(rows, class_gates, policy),
         bumps=rows,
-        failures=_failures(bumps),
+        failures=all_failures,
         review_interval_seconds=review_interval_seconds,
         review_loops=review_loops,
         review_record=_review_record(review_loops, review_rows),
         reviews=review_rows,
         telemetry=run_telemetry,
+        bump_loops=bump_loops,
     )
