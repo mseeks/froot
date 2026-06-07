@@ -235,6 +235,11 @@ _ICONS = {
         '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/>'
         '<path d="M6 21V9a9 9 0 0 0 9 9"/>'
     ),
+    "scissors": (
+        '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/>'
+        '<path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/>'
+        '<path d="M14.8 14.8 20 20"/>'
+    ),
 }
 
 
@@ -807,7 +812,9 @@ def page(model: DashboardModel) -> str:
     tabs: list[tuple[str, str, str, str, str, str]] = []
     for i, view in enumerate(model.bump_loops):
         pid, tid = f"panel-{i}", f"tab-{i}"
-        icon = "shield" if view.loop == "security-patch" else "package"
+        icon = {"security-patch": "shield", "dead-code": "scissors"}.get(
+            view.loop, "package"
+        )
         tabs.append(
             (
                 tid,

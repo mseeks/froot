@@ -154,13 +154,17 @@ def _bump_rows(
         ci = execution.ci if execution else None
         ttm = _minutes_between(pr.opened_at, pr.merged_at)
         age = _hours_between(pr.opened_at, now) if pr.state == "open" else None
+        # A removal carries no version: show "unused" in the target column and
+        # no from-version, so a dead-code row reads "left-pad -> unused" rather
+        # than the bump-shaped "left-pad -> ?".
+        is_removal = pr.loop == Loop.DEAD_CODE.value
         rows.append(
             BumpRow(
                 repo=pr.repo,
                 loop=pr.loop,
                 package=pr.package or "?",
-                from_version=pr.from_version,
-                to_version=pr.to_version or "?",
+                from_version=None if is_removal else pr.from_version,
+                to_version="unused" if is_removal else (pr.to_version or "?"),
                 state=pr.state,
                 verdict=verdict,
                 ci=ci,

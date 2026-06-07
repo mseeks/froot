@@ -22,6 +22,27 @@ def test_parse_title_extracts_package_and_target():
     )
 
 
+def test_parse_title_handles_security_bumps():
+    # The title prefix varies by loop; a security bump must parse its package
+    # too (not just dependency-patch).
+    assert parse_title("security: bump left-pad to 1.4.3") == (
+        "left-pad",
+        "1.4.3",
+    )
+
+
+def test_parse_title_handles_dead_code_removals():
+    # A removal has no target version — the second element is None.
+    assert parse_title("dead-code: remove left-pad (unused)") == (
+        "left-pad",
+        None,
+    )
+    assert parse_title("dead-code: remove @scope/pkg (unused)") == (
+        "@scope/pkg",
+        None,
+    )
+
+
 def test_parse_title_rejects_non_froot_titles():
     assert parse_title("chore: update readme") is None
     assert parse_title("deps: bump vitest") is None

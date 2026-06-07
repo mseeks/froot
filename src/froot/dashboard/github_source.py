@@ -31,7 +31,14 @@ _TIMEOUT: Final = 15.0
 _LABEL: Final = "froot"
 _PER_PAGE: Final = 100
 
-_TITLE_RE: Final = re.compile(r"^deps: bump (?P<pkg>.+) to (?P<ver>\S+)\s*$")
+# Bump titles are ``<deps|security>: bump <pkg> to <ver>``; a dead-code removal
+# is ``dead-code: remove <pkg> (unused)`` and carries no target version.
+_BUMP_TITLE_RE: Final = re.compile(
+    r"^(?:deps|security): bump (?P<pkg>.+) to (?P<ver>\S+)\s*$"
+)
+_REMOVE_TITLE_RE: Final = re.compile(
+    r"^dead-code: remove (?P<pkg>.+) \(unused\)\s*$"
+)
 _FROM_RE: Final = re.compile(r"from (?P<from>\S+) to (?P<to>\S+)")
 # froot's squash merges leave a ``(#N)`` tail on the default-branch commit, so a
 # merged PR can be matched to its merge commit without a per-PR API call.
@@ -92,12 +99,20 @@ def _loop_from_labels(names: set[str]) -> str:
     return Loop.DEPENDENCY_PATCH.value
 
 
-def parse_title(title: str) -> tuple[str, str] | None:
-    """Parse ``deps: bump <pkg> to <ver>`` into ``(package, target)`` (pure)."""
-    match = _TITLE_RE.match(title.strip())
-    if match is None:
-        return None
-    return match.group("pkg"), match.group("ver")
+def parse_title(title: str) -> tuple[str, str | None] | None:
+    """Parse a froot PR title into ``(package, target_version_or_None)`` (pure).
+
+    Handles a bump (``<deps|security>: bump <pkg> to <ver>``) and a dead-code
+    removal (``dead-code: remove <pkg> (unused)``, which has no target version,
+    so the second element is ``None``). Returns ``None`` for an unrecognised
+    title.
+    """
+    title = title.strip()
+    if (bump := _BUMP_TITLE_RE.match(title)) is not None:
+        return bump.group("pkg"), bump.group("ver")
+    if (removal := _REMOVE_TITLE_RE.match(title)) is not None:
+        return removal.group("pkg"), None
+    return None
 
 
 def parse_from_version(body: str | None) -> str | None:

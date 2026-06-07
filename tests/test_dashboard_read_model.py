@@ -23,7 +23,7 @@ def _pr(
     package: str,
     state: str,
     *,
-    to_version: str = "1.0.0",
+    to_version: str | None = "1.0.0",
     from_version: str | None = None,
     verdict: str | None = None,
     opened: datetime | None = None,
@@ -807,6 +807,28 @@ def test_bump_loops_partition_each_loop_into_its_own_view():
     assert by_loop["security-patch"].track_record.merged == 1
     # The combined top-level view still sees both.
     assert model.track_record.merged == 2
+
+
+def test_dead_code_loop_renders_removal_shape():
+    # A removal carries no version: its row reads "left-pad -> unused" with no
+    # from-version, and it lands in its own dead-code view.
+    rm = _pr(3, "left-pad", "open", to_version=None, loop="dead-code")
+    model = read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        loops=(Loop.DEAD_CODE,),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=((rm,), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=_telemetry_off(),
+    )
+    by_loop = {v.loop: v for v in model.bump_loops}
+    assert by_loop["dead-code"].title == "Dead-code"
+    row = by_loop["dead-code"].bumps[0]
+    assert row.package == "left-pad"
+    assert row.to_version == "unused"
+    assert row.from_version is None
 
 
 def test_bump_loops_attribute_failures_by_workflow_id():

@@ -12,6 +12,7 @@ from froot.dashboard.temporal_source import (
     ReviewExecution,
     ScanExecution,
 )
+from froot.domain.loop import Loop
 from froot.policy.autonomy import AutonomyPolicy
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
@@ -82,6 +83,48 @@ def test_page_is_tabbed_one_per_loop_plus_determinism_and_telemetry():
     # the footer's authority envelope, trimmed of the word-bomb
     assert "Authority envelope" in html
     assert "froot" in html
+
+
+def test_dead_code_loop_renders_with_scissors_and_unused():
+    # The dead-code tab gets the scissors icon and its removal rows read
+    # "<pkg> -> unused", not the bump-shaped "<pkg> -> <version>".
+    rm = GithubPr(
+        repo=REPO,
+        number=5,
+        url=f"https://github.com/{REPO}/pull/5",
+        package="left-pad",
+        from_version=None,
+        to_version=None,
+        verdict=None,
+        state="open",
+        opened_at=NOW,
+        merged_at=None,
+        loop="dead-code",
+    )
+    model = read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        loops=(Loop.DEAD_CODE,),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=((rm,), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=(
+            RunTelemetry(
+                available=False,
+                total_spans=0,
+                error_spans=0,
+                last_activity=None,
+                window_days=3,
+                activities=(),
+            ),
+            "off",
+        ),
+    )
+    html = render.page(model)
+    assert "Dead-code" in html  # the tab label
+    assert "M20 4 8.12 15.88" in html  # the scissors icon path
+    assert "unused" in html  # the removal's target column, not a version
 
 
 def test_theme_toggle_is_present_and_light_is_the_default():
