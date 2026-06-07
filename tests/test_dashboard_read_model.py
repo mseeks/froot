@@ -29,6 +29,7 @@ def _pr(
     opened: datetime | None = None,
     merged: datetime | None = None,
     env: str | None = None,
+    loop: str = "dependency-patch",
 ) -> GithubPr:
     return GithubPr(
         repo=REPO,
@@ -42,6 +43,7 @@ def _pr(
         opened_at=opened,
         merged_at=merged,
         env=env,
+        loop=loop,
     )
 
 
@@ -778,3 +780,61 @@ def test_gate_holds_open_pr_on_pending_ci():
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is False
     assert open_row.held_reason == "CI pending"
+
+
+def test_bump_loops_partition_each_loop_into_its_own_view():
+    # Two loops, one merged PR each: every loop gets its own self-contained view
+    # (its own bumps + track record), and a PR never crosses loops.
+    dep = _pr(1, "left-pad", "merged", verdict="clean", loop="dependency-patch")
+    sec = _pr(2, "left-pad", "merged", verdict="clean", loop="security-patch")
+    model = read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=((dep, sec), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=_telemetry_off(),
+    )
+    by_loop = {v.loop: v for v in model.bump_loops}
+    assert set(by_loop) == {"dependency-patch", "security-patch"}
+    assert by_loop["dependency-patch"].title == "Dependency-patch"
+    assert [r.pr_number for r in by_loop["dependency-patch"].bumps] == [1]
+    assert [r.pr_number for r in by_loop["security-patch"].bumps] == [2]
+    # Each per-loop track record counts only its own merge.
+    assert by_loop["dependency-patch"].track_record.merged == 1
+    assert by_loop["security-patch"].track_record.merged == 1
+    # The combined top-level view still sees both.
+    assert model.track_record.merged == 2
+
+
+def test_bump_loops_attribute_failures_by_workflow_id():
+    # A segmentless id is dependency-patch; a security-patch-segmented id is
+    # security-patch — failures land in the right loop's view.
+    dep_fail = _bump("left-pad-1.0.0", "failed", reason="boom")
+    sec_fail = BumpExecution(
+        workflow_id="froot-bump-security-patch-mseeks-revisionist-x-1.0.0",
+        status="failed",
+        start=datetime(2026, 6, 2, 19, 45, tzinfo=UTC),
+        close=None,
+        verdict=None,
+        ci=None,
+        pr_number=None,
+        repo=REPO,
+        reason="boom",
+    )
+    model = read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=((), None),
+        temporal=(((), (dep_fail, sec_fail), (), ()), None),
+        telemetry=_telemetry_off(),
+    )
+    by_loop = {v.loop: v for v in model.bump_loops}
+    assert len(by_loop["dependency-patch"].failures) == 1
+    assert len(by_loop["security-patch"].failures) == 1
+    assert "security-patch" in by_loop["security-patch"].failures[0].workflow_id

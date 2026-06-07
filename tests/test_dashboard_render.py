@@ -63,29 +63,33 @@ def _pr(number: int, package: str, state: str, **kw) -> GithubPr:
     )
 
 
+# ── the page shell: self-contained, no JS, tabbed ────────────────────────────
 def test_page_is_a_self_contained_html_document():
     html = render.page(_model())
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</html>")
     assert "http://" not in html and "https://" not in html  # no links
-    assert "<script" not in html.lower()  # no JavaScript at all
+    assert "<script" not in html.lower()  # CSS-only tabs, no JavaScript
 
 
-def test_page_shows_the_headline_sections_and_authority_footer():
+def test_page_is_tabbed_one_per_loop_plus_determinism_and_telemetry():
     html = render.page(_model())
-    for needle in (
-        "froot",
-        "Dependency-patch",  # the loop-group header
-        "Is it alive?",
-        "Track record",
-        "Verification",
-        "Model judgment",
-        "Approval gate",
-        "Determinism review",  # the second loop-group header
-        "Authority envelope",
-        "derived live",
-    ):
-        assert needle in html
+    assert '<nav class="tabbar">' in html
+    # CSS-only tabs: hidden radio inputs drive the panels, no script.
+    assert 'type="radio"' in html and "<script" not in html.lower()
+    for label in ("Dependency-patch", "Determinism review", "Telemetry"):
+        assert label in html
+    # the footer's authority envelope, trimmed of the word-bomb
+    assert "Authority envelope" in html
+    assert "froot" in html
+
+
+def test_gate_hero_shows_the_four_bearings_and_a_decision():
+    html = render.page(_model())
+    assert "Earned autonomy" in html and "the gate" in html
+    for bearing in ("approval rate", "defect rate", "probe", "deep review"):
+        assert bearing in html
+    assert "HOLD" in html  # no record yet -> the gate holds
 
 
 def test_page_renders_track_record_numbers():
@@ -94,11 +98,12 @@ def test_page_renders_track_record_numbers():
         _pr(2, "b", "merged", opened=NOW, merged=NOW),
     ]
     html = render.page(_model(prs=prs))
-    assert "100%" in html  # 2/2 merge rate
-    assert ">2<" in html  # the merged count appears as a stat
+    assert "100%" in html  # 2/2 approval rate
+    assert ">2<" in html  # the proposed count as a card stat
+    assert "2 merged" in html
 
 
-def test_page_links_open_prs_and_lists_bumps():
+def test_page_links_open_prs_and_lists_them_in_the_queue():
     prs = [_pr(23, "vitest", "open", to_version="3.2.6")]
     html = render.page(_model(prs=prs))
     assert f"https://github.com/{REPO}/pull/23" in html
@@ -114,12 +119,12 @@ def test_page_escapes_dynamic_content():
     assert "&lt;script&gt;" in html
 
 
-def test_empty_state_is_explicit_not_blank():
+def test_empty_queue_is_explicit_not_blank():
     html = render.page(_model())
-    assert "No bumps proposed yet" in html
-    assert "Queue empty" in html
+    assert "Nothing awaiting you" in html
 
 
+# ── telemetry tab ────────────────────────────────────────────────────────────
 def test_telemetry_panel_reports_unavailable_when_off():
     html = render.page(_model())
     assert "Unavailable" in html
@@ -146,10 +151,10 @@ def test_telemetry_panel_renders_activity_rows_when_available():
     )
     html = render.page(_model(telemetry=telemetry))
     assert "open_pull_request" in html
-    assert "75 spans" in html
+    assert ">75<" in html and "spans" in html
 
 
-def test_live_scan_loop_shows_a_repo_row():
+def test_scan_cadence_shows_liveness_and_next_due():
     scans = [
         ScanExecution(
             workflow_id="froot-scan-mseeks-revisionist",
@@ -158,11 +163,11 @@ def test_live_scan_loop_shows_a_repo_row():
         )
     ]
     html = render.page(_model(scans=scans))
-    assert REPO in html
-    assert "next" in html  # the next-due hint for a live loop
+    assert REPO in html  # the class row carries the repo
+    assert "next" in html  # the next-due hint for the live loop
 
 
-# ── Determinism review sections ──────────────────────────────────────────────
+# ── determinism review tab ───────────────────────────────────────────────────
 def _review(status: str = "running") -> ReviewExecution:
     return ReviewExecution(
         workflow_id="froot-review-mseeks-revisionist",
@@ -190,18 +195,17 @@ def _pr_review(
     )
 
 
-def test_page_shows_determinism_sections_with_empty_states():
+def test_determinism_tab_has_its_own_treatment_and_empty_state():
     html = render.page(_model())
     assert "Determinism review" in html
     assert "transitive ring" in html
-    assert "No determinism-review loops running" in html
     assert "No PRs reviewed yet" in html
 
 
-def test_review_heartbeat_clears_empty_note_when_a_loop_is_live():
-    live = render.page(_model(reviews=[_review("running")]))
-    assert "No determinism-review loops running" not in live
-    assert "next" in live  # the next-due hint for the live review loop
+def test_determinism_tab_counts_a_live_review_loop():
+    html = render.page(_model(reviews=[_review("running")]))
+    assert "loops live" in html  # the liveness card
+    assert ">1<" in html  # one repo covered / one loop live
 
 
 def test_flagged_review_renders_rule_count_and_comment_link():
@@ -219,32 +223,7 @@ def test_clean_review_renders_clean_not_a_hazard():
     assert ">clean<" in html
 
 
-# ── Hierarchy: two loop groups, at-a-glance, foldable framing ─────────────────
-def test_sections_are_grouped_into_collapsible_loops():
-    html = render.page(_model())
-    # two loops, each a collapsible <details> collapsed by default (no `open`)
-    assert html.count('<details class="loop">') == 2
-    # telemetry is its own differentiated "shared" group, not part of a loop
-    assert html.count('<details class="loop shared">') == 1
-    assert html.count('class="loophead"') == 3
-    for title in ("Dependency-patch", "Determinism review", "Run telemetry"):
-        assert title in html
-
-
-def test_loop_header_carries_an_at_a_glance():
-    prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
-    html = render.page(_model(prs=prs, reviews=[_review("running")]))
-    assert 'class="glance"' in html
-    assert "proposed" in html  # dependency-patch glance
-    assert "reviewed" in html  # determinism glance
-
-
-def test_framing_notes_fold_behind_details():
-    html = render.page(_model())
-    assert 'details class="why"' in html
-
-
-# ── Earned-autonomy panel + shadow-gate badge ────────────────────────────────
+# ── the gate: per-class standing + queue badge ───────────────────────────────
 def _model_p(
     prs: Sequence[GithubPr],
     bumps: Sequence[BumpExecution],
@@ -295,16 +274,13 @@ def _clean_green(number: int, package: str) -> tuple[GithubPr, BumpExecution]:
     return pr, bump
 
 
-def test_panel_renders_header_and_unearned_row_with_no_history():
-    # A configured repo with no decisions yet still shows its class, honestly
-    # not-earned, with the blocker spelled out (the shadow gate's dry run).
+def test_class_table_shows_the_unearned_blocker_with_no_history():
     html = render.page(_model())
-    assert "Earned autonomy" in html
-    assert "shadow gate" in html
-    assert "only 0/5 decided recently" in html
+    assert "Per-class standing" in html
+    assert "only 0/5 decided recently" in html  # the honest blocker
 
 
-def test_panel_shows_no_classes_yet_when_no_repos_configured():
+def test_hero_says_no_classes_when_no_repos_configured():
     model = read_model.assemble(
         now=NOW,
         repos=(),
@@ -327,26 +303,38 @@ def test_panel_shows_no_classes_yet_when_no_repos_configured():
     assert "No classes yet" in render.page(model)
 
 
-def test_shadow_badge_holds_open_pr_with_substantive_reason():
-    # No history + default policy: the badge holds the PR and shows the real
-    # blocker (the class has no record yet), not the steward's allowlist switch.
+def test_queue_badge_holds_open_pr_with_substantive_reason():
     prs = [_pr(23, "vitest", "open", verdict="clean", opened=NOW)]
     html = render.page(_model_p(prs, [], AutonomyPolicy()))
     assert "held" in html
     assert "class not earned" in html
 
 
-def test_panel_marks_class_earned_and_shows_reclaim_budget():
+def test_class_earned_pill_and_budget():
     pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3, 4, 5)]
     prs = [p for p, _ in pairs]
     bumps = [b for _, b in pairs]
     policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
     held = {(REPO, n): "held" for n in (1, 2, 3, 4, 5)}  # defect bearing clean
     html = render.page(_model_p(prs, bumps, policy, outcomes=held))
-    assert ">earned<" in html  # the class cleared its gate
-    assert "reclaimable" in html  # the budget framing
+    assert ">earned<" in html  # the class cleared its gate (the pill)
+    assert "budget/wk" in html  # the budget column
 
 
+def test_queue_badge_would_auto_merge_on_earned_allowlisted_class():
+    pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3)]
+    prs = [p for p, _ in pairs]
+    bumps = [b for _, b in pairs]
+    _, open_bump = _clean_green(9, "axios")
+    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
+    bumps.append(open_bump)
+    policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
+    held = {(REPO, n): "held" for n in (1, 2, 3)}  # clear the defect bearing
+    html = render.page(_model_p(prs, bumps, policy, outcomes=held))
+    assert "would auto-merge" in html
+
+
+# ── reliability + probes surface in the loop's cards / detail ────────────────
 def _model_outcomes(
     prs: Sequence[GithubPr], outcomes: dict[tuple[str, int], str]
 ) -> DashboardModel:
@@ -374,58 +362,32 @@ def _model_outcomes(
     )
 
 
-def test_reliability_panel_empty_state():
-    html = render.page(_model())
-    assert "Reliability" in html
-    assert "did the merge hold" in html
-    assert "No post-merge outcomes determined yet" in html
-
-
-def test_reliability_panel_renders_outcomes_and_defect_rate():
+def test_defect_rate_card_and_post_merge_tags():
     prs = [
         _pr(1, "a", "merged", opened=NOW, merged=NOW),
         _pr(2, "b", "merged", opened=NOW, merged=NOW),
     ]
     outcomes = {(REPO, 1): "held", (REPO, 2): "broke"}
     html = render.page(_model_outcomes(prs, outcomes))
-    assert ">held<" in html
-    assert ">broke<" in html
     assert "defect rate" in html
     assert "50%" in html  # 1 of 2 determined was a defect
+    assert ">held<" in html and ">broke<" in html  # the post-merge tags
 
 
-def test_probes_panel_empty_state():
-    html = render.page(_model())
-    assert "Adversarial probes" in html
-    assert "No adversarial probes yet" in html
-
-
-def test_probes_panel_alarms_when_a_canary_escapes():
-    # A merged canary (to 99.99.99) is a guardrail hole — the panel alarms,
-    # and the canary stays out of the genuine bumps table.
+def test_canary_escape_shows_in_probes_card_and_segregated():
+    # A merged canary (to 99.99.99) is a guardrail hole: the probes card counts
+    # the escape, and the canary stays out of the genuine bumps.
     prs = [
         _pr(7, "evil", "merged", to_version="99.99.99", opened=NOW, merged=NOW)
     ]
     html = render.page(_model_outcomes(prs, {}))
-    assert "escaped" in html
-    assert "guardrail has a hole" in html
+    assert "probes escaped" in html
+    # the canary is not a real bump -> the track record stays at zero proposed
+    assert "evil" not in html
 
 
-def test_bumps_table_has_held_column_and_per_row_tag():
+def test_bumps_fold_lists_bumps_with_post_merge_column():
     prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
     html = render.page(_model_outcomes(prs, {(REPO, 1): "reverted"}))
-    assert "held?" in html  # the new column header
+    assert "post-merge" in html  # the bumps-table column
     assert "reverted" in html  # the per-row post-merge tag
-
-
-def test_shadow_badge_would_auto_merge_on_earned_allowlisted_class():
-    pairs = [_clean_green(n, f"pkg{n}") for n in (1, 2, 3)]
-    prs = [p for p, _ in pairs]
-    bumps = [b for _, b in pairs]
-    _, open_bump = _clean_green(9, "axios")
-    # Re-open the 9th: clean verdict + green CI, but still awaiting a human.
-    prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
-    bumps.append(open_bump)
-    policy = AutonomyPolicy(min_decided=3, allowlisted_repos=frozenset({REPO}))
-    html = render.page(_model_p(prs, bumps, policy))
-    assert "would auto-merge" in html
