@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import froot.adapters.uv as uv_mod
 from froot.adapters.npm import NpmPackageManager
 from froot.adapters.registry import package_manager_for
 from froot.adapters.uv import (
@@ -11,25 +12,123 @@ from froot.adapters.uv import (
     _pinned_python_minor,
     normalize_name,
     parse_available_versions,
+    parse_deptry_unused,
     parse_direct_dependencies,
     parse_locked_versions,
+    parse_main_and_dev_dependencies,
 )
 from froot.domain.ecosystem import Ecosystem
-from tests.support import make_removal, make_repo, ver
+from froot.domain.sandbox import SandboxResult
+from tests.support import FakeSandbox, make_removal, make_repo, ver
+
+# A pyproject with a main dep, a dev-group dep, and an optional-extra dep.
+_PYPROJECT = """
+[project]
+name = "x"
+dependencies = ["requests>=2", "Pillow>=10"]
+[project.optional-dependencies]
+extra = ["rich>=13"]
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1"]
+"""
 
 
-async def test_list_unused_is_deferred_for_uv(tmp_path):
-    # The uv dead-code signal is deferred (deptry needs the project's deps
-    # installed); until a sandbox lands it yields nothing, so the loop never
-    # proposes a removal for a uv repo.
-    removals = await UvPackageManager().list_unused(
+def test_parse_main_and_dev_dependencies_splits_sections():
+    main, dev = parse_main_and_dev_dependencies(_PYPROJECT)
+    assert main == frozenset({"requests", "pillow"})  # normalized
+    assert dev == frozenset({"pytest", "mypy"})
+    # the optional-extra (rich) is in neither set -> skipped by the loop
+
+
+def test_parse_deptry_unused_extracts_dep002_only():
+    payload = json.dumps(
+        [
+            {"error": {"code": "DEP002"}, "module": "requests"},
+            {"error": {"code": "DEP002"}, "module": "pytest"},
+            {"error": {"code": "DEP001"}, "module": "missing-import"},
+        ]
+    )
+    assert parse_deptry_unused(payload) == ("requests", "pytest")
+
+
+def test_parse_deptry_unused_empty_or_garbage():
+    assert parse_deptry_unused("") == ()
+    assert parse_deptry_unused("[]") == ()
+    assert parse_deptry_unused("not json") == ()
+
+
+async def test_list_unused_runs_deptry_in_sandbox_and_classifies(tmp_path):
+    # deptry (in the sandbox) flags a main dep, a dev-group dep, and an
+    # optional-extra dep; the loop keeps the first two with the right section
+    # and skips the unsupported extra.
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    deptry_json = json.dumps(
+        [
+            {"error": {"code": "DEP002"}, "module": "requests"},  # main
+            {"error": {"code": "DEP002"}, "module": "pytest"},  # dev group
+            {"error": {"code": "DEP002"}, "module": "rich"},  # extra -> skip
+        ]
+    )
+    sandbox = FakeSandbox(
+        SandboxResult(exit_code=1, stdout=deptry_json, stderr="")
+    )
+    removals = await UvPackageManager(sandbox=sandbox).list_unused(
+        make_repo(ecosystem=Ecosystem.UV), tmp_path
+    )
+    assert {(r.package, r.dev) for r in removals} == {
+        ("requests", False),
+        ("pytest", True),
+    }
+    assert all(r.justification == "unused (deptry)" for r in removals)
+    # the deptry script (uv sync + deptry) ran in the sandbox
+    assert any("deptry" in s for s in sandbox.scripts)
+
+
+async def test_list_unused_no_manifest_yields_nothing(tmp_path):
+    sandbox = FakeSandbox()
+    removals = await UvPackageManager(sandbox=sandbox).list_unused(
         make_repo(ecosystem=Ecosystem.UV), tmp_path
     )
     assert removals == ()
+    assert sandbox.scripts == []  # never even spun a sandbox
 
 
-async def test_remove_dependency_is_not_implemented_for_uv(tmp_path):
-    with pytest.raises(NotImplementedError, match="deferred"):
+async def test_remove_dependency_runs_uv_remove(monkeypatch, tmp_path):
+    seen: list[str] = []
+
+    async def fake_run_text(*args: str, cwd):
+        seen.extend(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(uv_mod, "run_text", fake_run_text)
+    await UvPackageManager().remove_dependency(
+        make_removal(package="requests", ecosystem=Ecosystem.UV, dev=False),
+        tmp_path,
+    )
+    assert seen == ["uv", "remove", "requests", "--no-sync"]
+
+
+async def test_remove_dependency_dev_uses_dev_flag(monkeypatch, tmp_path):
+    seen: list[str] = []
+
+    async def fake_run_text(*args: str, cwd):
+        seen.extend(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(uv_mod, "run_text", fake_run_text)
+    await UvPackageManager().remove_dependency(
+        make_removal(package="pytest", ecosystem=Ecosystem.UV, dev=True),
+        tmp_path,
+    )
+    assert seen == ["uv", "remove", "--dev", "pytest", "--no-sync"]
+
+
+async def test_remove_dependency_raises_on_failure(monkeypatch, tmp_path):
+    async def fake_run_text(*args: str, cwd):
+        return 1, "", "not found"
+
+    monkeypatch.setattr(uv_mod, "run_text", fake_run_text)
+    with pytest.raises(RuntimeError, match="uv remove failed"):
         await UvPackageManager().remove_dependency(
             make_removal(ecosystem=Ecosystem.UV), tmp_path
         )

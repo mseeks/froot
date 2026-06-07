@@ -52,7 +52,7 @@ class E2bSandbox:
     """A :class:`~froot.ports.protocols.Sandbox` backed by e2b microVMs."""
 
     async def run(
-        self, workdir: Path, script: str, *, timeout_seconds: int = 600
+        self, workdir: Path, script: str, *, timeout_seconds: int | None = None
     ) -> SandboxResult:
         """Upload ``workdir``, run ``script`` in it, tear the sandbox down."""
         from e2b import AsyncSandbox, CommandExitException
@@ -64,10 +64,11 @@ class E2bSandbox:
             raise RuntimeError(
                 "FROOT_E2B_API_KEY is unset; the sandbox is not configured."
             )
+        timeout = timeout_seconds or settings.timeout_seconds
         tar = workdir_tar(workdir)
         sandbox = await AsyncSandbox.create(
             template=settings.template or None,
-            timeout=timeout_seconds,
+            timeout=timeout,
             api_key=settings.api_key.get_secret_value(),
         )
         try:
@@ -80,7 +81,7 @@ class E2bSandbox:
             )
             try:
                 result = await sandbox.commands.run(
-                    script, cwd="/work", timeout=timeout_seconds
+                    script, cwd="/work", timeout=timeout
                 )
                 return SandboxResult(
                     exit_code=result.exit_code,

@@ -354,7 +354,7 @@ class FakeSandbox:
         self.workdirs: list[Path] = []
 
     async def run(
-        self, workdir: Path, script: str, *, timeout_seconds: int = 600
+        self, workdir: Path, script: str, *, timeout_seconds: int | None = None
     ) -> SandboxResult:
         self.scripts.append(script)
         self.workdirs.append(workdir)

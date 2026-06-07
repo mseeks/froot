@@ -44,6 +44,7 @@ import httpx
 
 from froot.adapters._proc import run_text
 from froot.domain.candidate import AvailableUpgrade, InstalledPackage
+from froot.domain.removal import Removal
 from froot.domain.version import Version
 from froot.result import Ok
 
@@ -51,8 +52,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from froot.domain.candidate import Candidate
-    from froot.domain.removal import Removal
     from froot.domain.repo import TargetRepo
+    from froot.ports.protocols import Sandbox
 
 _PYPI_JSON = "https://pypi.org/pypi"
 _TIMEOUT = 15.0
@@ -116,6 +117,68 @@ def parse_direct_dependencies(pyproject: str) -> frozenset[str]:
         for group in groups.values():
             _collect_requirements(group, names)
     return frozenset(names)
+
+
+def parse_main_and_dev_dependencies(
+    pyproject: str,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Split a ``pyproject.toml`` into main vs ``dev``-group dependency names.
+
+    Returns ``(main, dev)`` — the PEP 503-normalized names declared in PEP 621
+    ``[project.dependencies]`` and in the PEP 735 ``[dependency-groups]``
+    ``dev`` group. The dead-code arm v1 removes only from these two sections
+    (the common case); a dep flagged unused that lives only in an optional-extra
+    or a non-``dev`` group is skipped, since removing it needs a different ``uv
+    remove`` flag. Malformed TOML yields two empty sets.
+    """
+    try:
+        data = tomllib.loads(pyproject)
+    except tomllib.TOMLDecodeError:
+        return frozenset(), frozenset()
+    main: set[str] = set()
+    dev: set[str] = set()
+    project = data.get("project")
+    if isinstance(project, dict):
+        _collect_requirements(project.get("dependencies"), main)
+    groups = data.get("dependency-groups")
+    if isinstance(groups, dict):
+        _collect_requirements(groups.get("dev"), dev)
+    return frozenset(main), frozenset(dev)
+
+
+def parse_deptry_unused(stdout: str) -> tuple[str, ...]:
+    """Parse ``deptry --json-output`` into the unused (DEP002) dependency names.
+
+    deptry emits a flat JSON array of issue objects; an unused dependency is
+    ``error.code == "DEP002"`` with the dependency name in ``module``. Tolerates
+    leading chatter before the array (locating the first ``[``); empty or
+    unparseable output yields ``()`` — conservative: no flags, never a raise.
+    """
+    text = stdout.strip()
+    if not text:
+        return ()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("[")
+        if start < 0:
+            return ()
+        try:
+            data = json.loads(text[start:])
+        except json.JSONDecodeError:
+            return ()
+    if not isinstance(data, list):
+        return ()
+    names: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        error = item.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        module = item.get("module")
+        if code == "DEP002" and isinstance(module, str) and module:
+            names.append(module)
+    return tuple(names)
 
 
 def parse_locked_versions(uv_lock: str) -> dict[str, str]:
@@ -215,8 +278,36 @@ def _pinned_python_minor(workspace: Path) -> str | None:
     return None
 
 
+# The dead-code signal for uv: install the project's deps (so deptry can map
+# import names to distributions), then run deptry. Runs in the sandbox — the
+# one place the worker lets a target's ``uv sync`` (third-party code) execute.
+# uv is installed at run time on the base image; deptry is injected into the
+# synced env so it sees the installed metadata. Tool chatter goes to stderr;
+# stdout is the deptry JSON (or ``[]`` if anything upstream failed).
+_DEPTRY_SCRIPT = """\
+set -e
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh >&2
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+uv sync --frozen >&2 || uv sync >&2
+uv run --no-sync --with deptry deptry . --json-output /tmp/d.json >&2 || true
+cat /tmp/d.json 2>/dev/null || echo "[]"
+"""
+
+
 class UvPackageManager:
     """A :class:`~froot.ports.protocols.PackageManager` backed by ``uv``."""
+
+    def __init__(self, sandbox: Sandbox | None = None) -> None:
+        """Hold the sandbox the dead-code signal runs ``deptry`` in.
+
+        ``None`` (the production default) lazily builds the e2b backend at first
+        use; tests inject an in-memory fake. Only the dead-code *signal* needs
+        it — the bump and removal *actions* are lockfile-only on the worker.
+        """
+        self._sandbox = sandbox
 
     async def list_upgrades(
         self, target: TargetRepo, workspace: Path
@@ -288,26 +379,65 @@ class UvPackageManager:
     async def list_unused(
         self, target: TargetRepo, workspace: Path
     ) -> tuple[Removal, ...]:
-        """No uv dead-code signal yet — deferred to a sandboxed executor.
+        """Report each unused direct dependency via ``deptry`` in the sandbox.
 
-        ``deptry`` needs the target's dependencies *installed* to map import
-        names to distribution names (e.g. ``pydantic_ai`` ->
-        ``pydantic-ai-slim``); run without them it is almost all false
-        positives. Installing them means running third-party code, which the
-        worker never does. So the uv arm waits on a sandbox (see VISION); until
-        then this yields nothing and the loop never proposes a uv removal.
+        ``deptry`` needs the deps *installed* to map import names to
+        distributions, so the install + analysis run in the sandbox (off the
+        worker). The section (main vs ``dev`` group) is classified from the
+        *local* checkout's ``pyproject.toml`` — the worker already has it — so a
+        flagged dep that lives only in an unsupported section (an optional-extra
+        or a non-``dev`` group) is skipped rather than mis-removed. Best-effort:
+        an empty/failed sandbox run yields no removals, never a raise.
         """
-        del target, workspace  # intentionally unused — deferred (see docstring)
-        return ()
+        manifest = workspace / "pyproject.toml"
+        if not manifest.exists():
+            return ()
+        main, dev = parse_main_and_dev_dependencies(manifest.read_text())
+        sandbox = self._sandbox or self._default_sandbox()
+        result = await sandbox.run(workspace, _DEPTRY_SCRIPT)
+        removals: list[Removal] = []
+        for name in parse_deptry_unused(result.stdout):
+            normalized = normalize_name(name)
+            if normalized in main:
+                is_dev = False
+            elif normalized in dev:
+                is_dev = True
+            else:
+                continue  # an unsupported section — not safe to remove blindly
+            removals.append(
+                Removal(
+                    package=name,
+                    ecosystem=target.ecosystem,
+                    dev=is_dev,
+                    justification="unused (deptry)",
+                )
+            )
+        return tuple(removals)
 
     async def remove_dependency(
         self, removal: Removal, workspace: Path
     ) -> None:
-        """Unreachable until the uv signal lands; fail loudly if ever called."""
-        del removal, workspace  # intentionally unused — deferred
-        raise NotImplementedError(
-            "uv dead-code removal is deferred pending a sandboxed executor"
-        )
+        """Remove the dependency from ``pyproject.toml`` + ``uv.lock``.
+
+        ``uv remove`` edits the manifest and relocks; ``--no-sync`` keeps it to
+        a manifest+lock rewrite with no virtualenv install (no project or
+        dependency code runs on the worker). ``--dev`` targets the ``dev``
+        dependency-group when the signal classified it there.
+        """
+        args = ["uv", "remove"]
+        if removal.dev:
+            args.append("--dev")
+        args += [removal.package, "--no-sync"]
+        code, out, err = await run_text(*args, cwd=workspace)
+        if code != 0:
+            raise RuntimeError(f"uv remove failed ({code}): {err or out}")
+
+    @staticmethod
+    def _default_sandbox() -> Sandbox:
+        """Build the production sandbox backend (e2b), imported lazily."""
+        from froot.adapters.e2b_sandbox import E2bSandbox
+
+        return E2bSandbox()
 
     async def apply_patch_bump(
         self, candidate: Candidate, workspace: Path

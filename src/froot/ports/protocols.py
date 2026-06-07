@@ -278,16 +278,17 @@ class Sandbox(Protocol):
     """
 
     async def run(
-        self, workdir: Path, script: str, *, timeout_seconds: int = 600
+        self, workdir: Path, script: str, *, timeout_seconds: int | None = None
     ) -> SandboxResult:
         """Upload ``workdir``, run ``script`` in it, tear the sandbox down.
 
         ``script`` is a ``sh`` snippet run with the upload as its working
         directory; it may reach the internet (install deps) but nothing in
         froot's cluster. The sandbox is created and destroyed within the call,
-        so each run is fresh and nothing persists between them. Returns the
-        command's exit code and captured output; raising only on an
-        infrastructure failure (the sandbox could not be created), never on a
-        non-zero script exit — that is the caller's to interpret.
+        so each run is fresh and nothing persists between them.
+        ``timeout_seconds`` caps the run; ``None`` uses the backend's configured
+        default. Returns the command's exit code and captured output, raising
+        only on an infrastructure failure (the sandbox could not be created),
+        never on a non-zero script exit — that is the caller's to interpret.
         """
         ...

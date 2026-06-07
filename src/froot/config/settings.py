@@ -169,7 +169,9 @@ class E2bSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     template: str = ""
-    timeout_seconds: int = Field(default=600, gt=0)
+    # Kept under the 10-minute scan activity timeout (with margin) so a slow
+    # ``uv sync`` is capped by the sandbox, not by the activity timing out.
+    timeout_seconds: int = Field(default=480, gt=0)
 
 
 class TelemetrySettings(BaseSettings):
