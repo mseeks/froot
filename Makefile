@@ -3,9 +3,9 @@
 
 .PHONY: sync fmt fmt-check lint type test check worker start-scan start-review
 
-# Install/refresh the dev env (dev tooling + ai + github + otel extras).
+# Install/refresh the dev env (dev tooling + ai + github + otel + sandbox).
 sync:
-	uv sync --extra dev --extra ai --extra github --extra otel
+	uv sync --extra dev --extra ai --extra github --extra otel --extra sandbox
 
 # Auto-format (ruff formatter) and fix lint where safe.
 fmt:

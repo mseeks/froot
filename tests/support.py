@@ -30,6 +30,7 @@ from froot.domain.pull_request import (
 )
 from froot.domain.removal import Removal
 from froot.domain.repo import RepoRef, TargetRepo
+from froot.domain.sandbox import SandboxResult
 from froot.domain.version import Version
 from froot.result import unwrap
 
@@ -338,3 +339,23 @@ class FakeJudge:
     async def judge_removal(self, removal: Removal) -> ChangelogVerdict:
         self.removals.append(removal)
         return self.removal_verdict
+
+
+class FakeSandbox:
+    """In-memory :class:`~froot.ports.protocols.Sandbox`.
+
+    Returns a canned result and records each script run (and the workdir), so a
+    test can drive the sandbox-backed signal without a real sandbox.
+    """
+
+    def __init__(self, result: SandboxResult | None = None) -> None:
+        self.result = result or SandboxResult(exit_code=0, stdout="", stderr="")
+        self.scripts: list[str] = []
+        self.workdirs: list[Path] = []
+
+    async def run(
+        self, workdir: Path, script: str, *, timeout_seconds: int = 600
+    ) -> SandboxResult:
+        self.scripts.append(script)
+        self.workdirs.append(workdir)
+        return self.result

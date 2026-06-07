@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     )
     from froot.domain.removal import Removal
     from froot.domain.repo import TargetRepo
+    from froot.domain.sandbox import SandboxResult
 
 
 class PackageManager(Protocol):
@@ -257,5 +258,36 @@ class ModelJudge(Protocol):
         safe to remove (the loop proposes it); ``risky``/``unknown`` hold it
         back, so a tool used without an import (pytest, eslint) never becomes a
         noisy PR. Same verdict shape as :meth:`judge`, a different prompt.
+        """
+        ...
+
+
+class Sandbox(Protocol):
+    """Runs a script against a checkout in an isolated sandbox.
+
+    The escape hatch from the no-third-party-code-in-the-worker invariant: a
+    signal whose analysis needs the target's dependencies *installed* (uv's
+    ``deptry``, and later an agentic coding harness) runs here, off the worker
+    and off the cluster. The implementation (an e2b microVM today; an in-cluster
+    pod or the target's CI tomorrow) is swappable behind this seam.
+
+    The worker uploads its *existing* checkout — so froot's GitHub token never
+    enters the sandbox — then the sandbox runs the script with internet egress
+    (to install from PyPI/npm) but no path back to froot. The caller parses
+    ``stdout`` with its own pure parser.
+    """
+
+    async def run(
+        self, workdir: Path, script: str, *, timeout_seconds: int = 600
+    ) -> SandboxResult:
+        """Upload ``workdir``, run ``script`` in it, tear the sandbox down.
+
+        ``script`` is a ``sh`` snippet run with the upload as its working
+        directory; it may reach the internet (install deps) but nothing in
+        froot's cluster. The sandbox is created and destroyed within the call,
+        so each run is fresh and nothing persists between them. Returns the
+        command's exit code and captured output; raising only on an
+        infrastructure failure (the sandbox could not be created), never on a
+        non-zero script exit — that is the caller's to interpret.
         """
         ...

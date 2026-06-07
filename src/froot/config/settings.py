@@ -151,6 +151,27 @@ class ModelSettings(BaseSettings):
     gate_review_model: str = ""
 
 
+class E2bSettings(BaseSettings):
+    """The e2b sandbox backend's config (``FROOT_E2B_*``).
+
+    The signal sandbox for loops whose analysis needs the target's deps
+    installed (uv's ``deptry``). The API key is a :class:`~pydantic.SecretStr`,
+    so it is masked in ``repr``/logs; it is passed explicitly to the e2b SDK
+    rather than read from its default ``E2B_API_KEY`` env, so the credential is
+    namespaced under ``FROOT_`` like every other froot secret. ``template`` is
+    an optional e2b template id (a prebuilt image with the toolchain baked);
+    empty means the e2b base image, with the toolchain installed at run time.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_E2B_", env_file=".env", extra="ignore", frozen=True
+    )
+
+    api_key: SecretStr | None = None
+    template: str = ""
+    timeout_seconds: int = Field(default=600, gt=0)
+
+
 class TelemetrySettings(BaseSettings):
     """OpenTelemetry toggle — off unless ``FROOT_OTEL`` is truthy."""
 

@@ -44,6 +44,12 @@ otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.42,<2",
     "opentelemetry-instrumentation-httpx>=0.63b0,<1",
 ]
+# The sandbox backend: e2b Firecracker microVMs. A signal whose analysis needs
+# the target's deps installed (uv's `deptry`) runs the toolchain here, isolated
+# from the worker and the cluster. Kept out of the default env like the others.
+sandbox = [
+    "e2b>=2.26,<3",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -86,6 +92,12 @@ warn_required_dynamic_aliases = true
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+# The e2b SDK ships no py.typed marker; treat it as untyped at its boundary
+# (the adapter wrapping it stays fully typed).
+[[tool.mypy.overrides]]
+module = "e2b.*"
+ignore_missing_imports = true
 
 # ── Lint + format: ruff, Google style ───────────────────────────────────────
 [tool.ruff]
