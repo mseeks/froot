@@ -28,6 +28,7 @@ from froot.workflow.types import (
     CiCheckInput,
     CloseInput,
     DispatchInput,
+    GateSelfTestInput,
     JudgeInput,
     MergeInput,
     OpenPrInput,
@@ -444,6 +445,45 @@ async def test_reconcile_open_prs_noop_when_disabled(
     )
     assert closed == 0
     assert fake.closed == []
+
+
+async def test_gate_selftest_healthy_under_default_policy(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # The default live policy refuses every known-bad class -> nothing escapes,
+    # and the heartbeat logs healthy=True at INFO.
+    for var in (
+        "FROOT_AUTOMERGE_MIN_RATE",
+        "FROOT_AUTOMERGE_MIN_DECIDED",
+        "FROOT_AUTOMERGE_MAX_DEFECT_RATE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    with caplog.at_level("INFO", logger="froot.gate"):
+        escaped = await activities.gate_selftest(
+            GateSelfTestInput(target=make_repo())
+        )
+    assert escaped == ()
+    record = json.loads(caplog.records[-1].getMessage())
+    assert record["event"] == "gate_selftest"
+    assert record["healthy"] is True
+    assert record["escaped"] == []
+
+
+async def test_gate_selftest_alarms_when_config_loosens_the_gate(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # Drift: a steward raises the defect ceiling in config. The probe runs
+    # against the *live* policy, so a known-bad class now escapes and the alarm
+    # is logged at ERROR.
+    monkeypatch.setenv("FROOT_AUTOMERGE_MAX_DEFECT_RATE", "1.0")
+    with caplog.at_level("ERROR", logger="froot.gate"):
+        escaped = await activities.gate_selftest(
+            GateSelfTestInput(target=make_repo())
+        )
+    assert "a defect on record" in escaped
+    record = json.loads(caplog.records[-1].getMessage())
+    assert record["healthy"] is False
+    assert caplog.records[-1].levelname == "ERROR"
 
 
 async def test_judge_changelog_degrades_to_unknown_on_model_error(

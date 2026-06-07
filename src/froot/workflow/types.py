@@ -53,6 +53,18 @@ class ReconcileInput(Frozen):
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
+class GateSelfTestInput(Frozen):
+    """Input to the gate self-test activity (the adversarial probe's stimulus).
+
+    The probe is policy-scoped, not repo-scoped — it tests the *live gate*, the
+    same for every repo. ``target``/``loop`` ride along only as log context, so
+    the alarm names the tick that fired it.
+    """
+
+    target: TargetRepo
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
 class ScanResult(Frozen):
     """The result of one scan tick.
 

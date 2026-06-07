@@ -40,6 +40,7 @@ from froot.workflow.types import (
     CloseInput,
     DispatchInput,
     DispatchReviewInput,
+    GateSelfTestInput,
     JudgeInput,
     MergeInput,
     OpenPrInput,
@@ -57,6 +58,7 @@ _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
+_gate_log = logging.getLogger("froot.gate")
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -453,6 +455,38 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
             )
         )
     return len(closures)
+
+
+@activity.defn
+async def gate_selftest(params: GateSelfTestInput) -> tuple[str, ...]:
+    """Run the adversarial gate probe against the live policy; alarm on escape.
+
+    The §2.11 deliberate disturbance for the acting gate: a battery of synthetic
+    known-bad class histories a healthy gate must refuse, scored against the
+    policy froot is *actually running* (config and all). Any escape — a bad
+    class the live gate would grant — is logged at ERROR (the alarm) so it
+    surfaces in telemetry the moment config drifts; a clean pass logs a
+    heartbeat at INFO. Returns the escaped scenario names. Pure compute,
+    repo-independent (the ``target``/``loop`` are only the log's context).
+    """
+    from froot.config.settings import AutonomySettings
+    from froot.policy.gate_probe import gate_escapes
+
+    escaped = gate_escapes(AutonomySettings().policy())
+    record = json.dumps(
+        {
+            "event": "gate_selftest",
+            "loop": params.loop.value,
+            "repo": params.target.repo.slug,
+            "healthy": not escaped,
+            "escaped": list(escaped),
+        }
+    )
+    if escaped:
+        _gate_log.error(record)  # an alarm: the gate would trust a bad class
+    else:
+        _gate_log.info(record)
+    return escaped
 
 
 # ── The determinism reviewer (the transitive ring) ──────────────────────────

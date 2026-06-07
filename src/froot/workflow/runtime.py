@@ -39,6 +39,7 @@ ALL_ACTIVITIES: list[Callable[..., object]] = [
     activities.auto_merge_eligible,
     activities.merge_pull_request,
     activities.reconcile_open_prs,
+    activities.gate_selftest,
     activities.dispatch_bump,
     activities.list_review_prs,
     activities.dispatch_pr_review,

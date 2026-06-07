@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from froot.workflow.types import (
         DispatchInput,
+        GateSelfTestInput,
         ReconcileInput,
         ScanCandidatesInput,
         ScanParams,
@@ -62,6 +63,15 @@ class ScanWorkflow:
         reconciled = await workflow.execute_activity(
             activities.reconcile_open_prs,
             ReconcileInput(target=params.target, loop=params.loop),
+            start_to_close_timeout=ACTIVITY_TIMEOUT,
+            retry_policy=TOOL_RETRY,
+        )
+        # The adversarial probe (§2.11): every tick, confirm the *live* gate
+        # still refuses a battery of known-bad classes. Cheap, repo-independent,
+        # and alarms in telemetry the moment a config drift loosens the gate.
+        await workflow.execute_activity(
+            activities.gate_selftest,
+            GateSelfTestInput(target=params.target, loop=params.loop),
             start_to_close_timeout=ACTIVITY_TIMEOUT,
             retry_policy=TOOL_RETRY,
         )
