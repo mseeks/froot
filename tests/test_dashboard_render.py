@@ -69,19 +69,27 @@ def test_page_is_a_self_contained_html_document():
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</html>")
     assert "http://" not in html and "https://" not in html  # no links
-    assert "<script" not in html.lower()  # CSS-only tabs, no JavaScript
+    assert "<script src" not in html.lower()  # no external JS; theme is inline
 
 
 def test_page_is_tabbed_one_per_loop_plus_determinism_and_telemetry():
     html = render.page(_model())
     assert '<nav class="tabbar">' in html
-    # CSS-only tabs: hidden radio inputs drive the panels, no script.
-    assert 'type="radio"' in html and "<script" not in html.lower()
+    # CSS-only tabs: hidden radio inputs drive the panels (no external JS).
+    assert 'type="radio"' in html and "<script src" not in html.lower()
     for label in ("Dependency-patch", "Determinism review", "Telemetry"):
         assert label in html
     # the footer's authority envelope, trimmed of the word-bomb
     assert "Authority envelope" in html
     assert "froot" in html
+
+
+def test_theme_toggle_is_present_and_light_is_the_default():
+    html = render.page(_model())
+    # Light is the :root default; dark applies via system pref or the toggle.
+    assert "--fg:#1b1f24" in html  # the light palette is the base
+    assert "[data-theme=dark]" in html  # the forced-dark override exists
+    assert "__toggleTheme" in html and 'class="themetgl"' in html
 
 
 def test_gate_hero_shows_the_four_bearings_and_a_decision():

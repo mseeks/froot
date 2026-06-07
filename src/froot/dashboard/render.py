@@ -29,131 +29,164 @@ if TYPE_CHECKING:
         RunTelemetry,
     )
 
-_CSS = """
-:root{--fg:#13151a;--mut:#6b7280;--faint:#9aa1ac;--line:#e7e9ee;--bg:#fbfbfc;
---panel:#fff;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--accent:#0969da;
---accentbg:#ddf0ff;--chip:#f2f4f7;--node:#eef6ff}
-@media(prefers-color-scheme:dark){:root{--fg:#e8eaed;--mut:#9aa1ac;
---faint:#6b7280;--line:#23262d;--bg:#0a0b0d;--panel:#121419;--ok:#3fb950;
---warn:#d29922;--bad:#f85149;--accent:#58a6ff;--accentbg:#10263f;
---chip:#1a1d24;--node:#10263f}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
--webkit-font-smoothing:antialiased}
-main{padding:0 clamp(16px,3vw,44px) 64px}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
-.mut{color:var(--mut)}.ok{color:var(--ok)}.warn{color:var(--warn)}
-.bad{color:var(--bad)}
+_LIGHT = (
+    "--fg:#1b1f24;--mut:#586273;--faint:#8b94a3;--line:#e9ebef;--hair:#d6dae1;"
+    "--bg:#fcfcfd;--tint:#f5f6f9;--accent:#2563eb;--ok:#2f7d4f;--warn:#8a6011;"
+    "--bad:#b23a2e"
+)
+_DARK = (
+    "--fg:#e7e9ee;--mut:#9aa3b2;--faint:#6b7484;--line:#22262e;--hair:#333a45;"
+    "--bg:#0b0d10;--tint:#14171c;--accent:#5b9bff;--ok:#4cae6e;--warn:#d6a23f;"
+    "--bad:#e07a6e"
+)
+# Editorial-minimal "read-model" idiom: structure from hairlines + whitespace +
+# type, never from box fills; semantic color rides on dots and the value text,
+# not on filled chips. Light is the default; a toggle (data-theme) forces either
+# theme, and bare system preference is honored when nothing is forced.
+_CSS = f"""
+:root{{{_LIGHT};
+--serif:"Iowan Old Style",Palatino,Georgia,"Times New Roman",ui-serif,serif;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}}
+@media(prefers-color-scheme:dark){{:root:not([data-theme]){{{_DARK}}}}}
+:root[data-theme=dark]{{{_DARK}}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+-webkit-font-smoothing:antialiased}}
+main{{padding:0 clamp(16px,3vw,46px) 72px}}
+a{{color:var(--accent);text-decoration:none}}a:hover{{text-decoration:underline}}
+.mono{{font-family:var(--mono);font-size:.92em}}
+.serif{{font-family:var(--serif)}}
+.mut{{color:var(--mut)}}.ok{{color:var(--ok)}}.warn{{color:var(--warn)}}
+.bad{{color:var(--bad)}}.acc{{color:var(--accent)}}
+.num{{font-variant-numeric:tabular-nums}}
+/* status dot — the one carrier of valence besides the value text itself */
+.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}}
+.dot.ok{{background:var(--ok)}}.dot.warn{{background:var(--warn)}}
+.dot.bad{{background:var(--bad)}}.dot.mute{{background:var(--faint)}}
+.dot.acc{{background:var(--accent)}}
 /* header */
-header{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 20px;
-padding:22px 0 16px;border-bottom:1px solid var(--line)}
-h1{font-size:19px;margin:0;letter-spacing:-.02em;font-weight:700}
-h1 .v{color:var(--faint);font-weight:400;font-size:13px;margin-left:8px}
-.hstatus{display:flex;align-items:center;gap:7px;font-size:13px}
-.hmeta{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px 16px;
-color:var(--mut);font-size:12px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%}
-.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
-.dot.bad{background:var(--bad)}.dot.mute{background:var(--faint)}
-/* tabs (CSS-only) */
-.tabin{position:absolute;opacity:0;pointer-events:none}
-nav.tabbar{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0 0;
-border-bottom:1px solid var(--line)}
-nav.tabbar label{display:inline-flex;align-items:center;gap:8px;cursor:pointer;
-padding:9px 15px;font-size:13px;font-weight:600;color:var(--mut);
-border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
-nav.tabbar label:hover{color:var(--fg)}
-nav.tabbar label .badge{font-weight:600;font-size:11px;color:var(--faint);
-background:var(--chip);border-radius:9px;padding:1px 7px}
-.panel{display:none;padding:22px 0 0;animation:fade .15s ease}
-@keyframes fade{from{opacity:.4}to{opacity:1}}
+header{{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 22px;
+padding:26px 0 18px;border-bottom:1px solid var(--line)}}
+h1{{font-family:var(--serif);font-size:23px;margin:0;letter-spacing:-.01em;
+font-weight:600}}
+h1 .v{{font-family:var(--mono);color:var(--faint);font-weight:400;
+font-size:12px;margin-left:9px;letter-spacing:0}}
+.hstatus{{display:flex;align-items:center;gap:7px;font-size:13px}}
+.hmeta{{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;
+gap:7px 16px;color:var(--mut);font-size:12px}}
+.themetgl{{background:transparent;border:1px solid var(--line);border-radius:
+999px;width:30px;height:30px;cursor:pointer;color:var(--mut);font-size:14px;
+line-height:1;display:inline-flex;align-items:center;justify-content:center;
+transition:border-color .14s,color .14s}}
+.themetgl:hover{{border-color:var(--fg);color:var(--fg)}}
+/* tabs (CSS-only radios) */
+.tabin{{position:absolute;opacity:0;pointer-events:none}}
+nav.tabbar{{display:flex;flex-wrap:wrap;gap:2px 6px;margin:16px 0 0;
+border-bottom:1px solid var(--line)}}
+nav.tabbar label{{display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+padding:10px 4px;margin:0 12px -1px 0;font-size:13.5px;font-weight:600;
+color:var(--mut);border-bottom:2px solid transparent;white-space:nowrap;
+transition:color .14s}}
+nav.tabbar label:hover{{color:var(--fg)}}
+nav.tabbar label .badge{{font-family:var(--mono);font-weight:500;font-size:11px;
+color:var(--faint)}}
+.panel{{display:none;padding:26px 0 0;animation:fade .16s ease}}
+@keyframes fade{{from{{opacity:.45}}to{{opacity:1}}}}
 /* gate hero */
-.hero{display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(280px,1fr);
-gap:18px 26px;align-items:start;margin:0 0 6px}
-@media(max-width:760px){.hero{grid-template-columns:1fr}}
-.heroh{font-size:11px;text-transform:uppercase;letter-spacing:.09em;
-color:var(--mut);font-weight:700;margin:0 0 12px}
-.gateflow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.bearings{display:flex;flex-direction:column;gap:6px;min-width:150px}
-.bearing{display:flex;align-items:center;justify-content:space-between;gap:10px;
-background:var(--chip);border-radius:7px;padding:6px 10px;font-size:12px}
-.bearing .bl{color:var(--mut)}
-.bearing .bv{font-weight:600;font-variant-numeric:tabular-nums}
-.bearing.armed .bv{color:var(--faint);font-weight:500}
-.flowarrow{color:var(--faint);font-size:18px;line-height:1}
-.gatenode{flex:0 0 auto;text-align:center;border:2px solid var(--accent);
-background:var(--node);border-radius:12px;padding:12px 16px;min-width:96px}
-.gatenode .gl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;
-color:var(--accent);font-weight:700}
-.gatenode .gv{font-size:22px;font-weight:700;line-height:1.15;
-font-variant-numeric:tabular-nums}
-.gatenode .gs{font-size:11px;color:var(--mut)}
-.outcome{flex:0 0 auto;border-radius:10px;padding:11px 15px;text-align:center;
-border:1px solid var(--line)}
-.outcome .ot{font-size:15px;font-weight:700;letter-spacing:.01em}
-.outcome .os{font-size:11px;color:var(--mut);margin-top:1px}
-.outcome.act{background:color-mix(in srgb,var(--ok) 12%,transparent);
-border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
-.outcome.act .ot{color:var(--ok)}
-.outcome.hold .ot{color:var(--mut)}
-.caption{color:var(--mut);font-size:12px;margin:8px 0 0;line-height:1.45}
-/* class table inside the hero */
-.classes{width:100%;border-collapse:collapse;font-size:12.5px}
-.classes th,.classes td{text-align:left;padding:6px 10px 6px 0;
-border-bottom:1px solid var(--line);vertical-align:baseline}
-.classes th{color:var(--mut);font-weight:600;font-size:10.5px;
-text-transform:uppercase;letter-spacing:.05em}
-.classes td.r{font-variant-numeric:tabular-nums}
-.pill{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;
-padding:1px 9px}
-.pill.ok{color:var(--ok);
-background:color-mix(in srgb,var(--ok) 14%,transparent)}
-.pill.hold{color:var(--mut);background:var(--chip)}
-/* metric cards */
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-gap:10px;margin:22px 0 0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-padding:13px 15px}
-.card .n{font-size:24px;font-weight:700;line-height:1.05;
-font-variant-numeric:tabular-nums}
-.card .l{color:var(--mut);font-size:11.5px;margin-top:3px}
-.card .x{color:var(--faint);font-size:11px;margin-top:5px}
+.hero{{display:grid;align-items:start;margin:0 0 4px;gap:22px 40px;
+grid-template-columns:minmax(330px,1.05fr) minmax(300px,1fr)}}
+@media(max-width:780px){{.hero{{grid-template-columns:1fr}}}}
+.heroh{{font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+color:var(--mut);font-weight:600;margin:0 0 14px;padding-bottom:7px;
+border-bottom:1px solid var(--line)}}
+.gateflow{{display:flex;align-items:center;gap:14px;flex-wrap:wrap}}
+.bearings{{display:flex;flex-direction:column;min-width:172px;flex:1 1 172px}}
+.bearing{{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px}}
+.bearing:last-child{{border-bottom:0}}
+.bearing .bl{{color:var(--mut)}}
+.bearing .bv{{display:inline-flex;align-items:center;gap:7px;font-weight:600;
+font-variant-numeric:tabular-nums}}
+.bearing.armed .bv{{color:var(--faint);font-weight:500}}
+.flowarrow{{color:var(--hair);font-size:17px;line-height:1}}
+.gatenode{{flex:0 0 auto;text-align:center;padding:2px 6px}}
+.gatenode .gl{{font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+color:var(--mut);font-weight:600}}
+.gatenode .gv{{font-family:var(--serif);font-size:30px;font-weight:600;
+line-height:1.1;color:var(--accent);font-variant-numeric:tabular-nums}}
+.gatenode .gs{{font-size:11px;color:var(--faint)}}
+.outcome{{flex:0 0 auto;display:flex;flex-direction:column;gap:3px}}
+.outcome .ot{{display:flex;align-items:center;gap:7px;font-size:15px;
+font-weight:700;letter-spacing:.02em}}
+.outcome .os{{font-size:11px;color:var(--faint)}}
+.outcome.act .ot{{color:var(--ok)}}
+.outcome.hold .ot{{color:var(--mut)}}
+.caption{{color:var(--mut);font-size:12px;margin:14px 0 0;line-height:1.5;
+max-width:62ch}}
+/* per-class table inside the hero */
+.classes{{width:100%;border-collapse:collapse;font-size:12.5px}}
+.classes th,.classes td{{text-align:left;padding:7px 12px 7px 0;
+border-bottom:1px solid var(--line);vertical-align:baseline}}
+.classes th{{color:var(--faint);font-weight:600;font-size:10.5px;
+text-transform:uppercase;letter-spacing:.06em}}
+.classes td.r{{font-variant-numeric:tabular-nums}}
+.pill{{display:inline-flex;align-items:center;gap:6px;font-size:12px;
+font-weight:600}}
+.pill.ok{{color:var(--ok)}}.pill.hold{{color:var(--mut);font-weight:500}}
+/* metric strip — bare stats, no boxes; a hairline frames the row */
+.cards{{display:grid;gap:20px 30px;margin:26px 0 0;padding:18px 0 0;
+border-top:1px solid var(--line);
+grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
+.card .n{{font-size:26px;font-weight:600;line-height:1.05;
+font-variant-numeric:tabular-nums;letter-spacing:-.01em}}
+.card .l{{color:var(--mut);font-size:11px;text-transform:uppercase;
+letter-spacing:.05em;font-weight:600;margin-top:5px}}
+.card .x{{color:var(--faint);font-size:11.5px;margin-top:3px}}
 /* section + detail */
-.sec{margin:26px 0 0}
-.sech{font-size:11px;text-transform:uppercase;letter-spacing:.08em;
-color:var(--mut);font-weight:700;margin:0 0 10px;display:flex;
-align-items:baseline;gap:10px}
-.sech .n{color:var(--faint);font-weight:600;letter-spacing:0}
-details.fold{margin:18px 0 0;border:1px solid var(--line);border-radius:10px;
-background:var(--panel)}
-details.fold>summary{cursor:pointer;list-style:none;padding:11px 15px;
-font-size:12px;font-weight:600;color:var(--fg);display:flex;
-align-items:center;gap:9px}
-details.fold>summary::-webkit-details-marker{display:none}
-details.fold>summary::before{content:"\\25B8";color:var(--faint);font-size:10px}
-details.fold[open]>summary::before{content:"\\25BE"}
-details.fold>summary .c{color:var(--faint);font-weight:600}
-details.fold .body{padding:0 15px 14px}
-table.data{width:100%;border-collapse:collapse;font-size:12.5px}
-table.data th,table.data td{text-align:left;padding:6px 12px 6px 0;
-border-bottom:1px solid var(--line);vertical-align:top}
-table.data th{color:var(--mut);font-weight:600;font-size:10.5px;
-text-transform:uppercase;letter-spacing:.04em}
-table.data td.r{font-variant-numeric:tabular-nums;white-space:nowrap}
-.empty{color:var(--mut);font-size:13px;padding:14px 0;border:1px dashed
-var(--line);border-radius:9px;text-align:center;background:var(--panel)}
-.tags{display:flex;flex-wrap:wrap;gap:6px}
-.t{font-size:11px;border-radius:6px;padding:1px 7px;background:var(--chip);
-color:var(--mut)}
-.t.ok{color:var(--ok)}.t.warn{color:var(--warn)}.t.bad{color:var(--bad)}
-.cad{color:var(--mut);font-size:12px;margin:14px 0 0}
-.cad b{color:var(--fg);font-weight:600}
-footer{margin:40px 0 0;padding-top:16px;border-top:1px solid var(--line);
-color:var(--mut);font-size:12px;line-height:1.65}
-footer b{color:var(--fg);font-weight:600}
+.sec{{margin:30px 0 0}}
+.sech{{font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+color:var(--mut);font-weight:600;margin:0 0 12px;padding-bottom:7px;
+border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}}
+.sech .n{{color:var(--faint);font-weight:500;letter-spacing:0;
+text-transform:none}}
+details.fold{{margin:14px 0 0;border-top:1px solid var(--line)}}
+details.fold>summary{{cursor:pointer;list-style:none;padding:11px 0;
+font-size:12px;font-weight:600;color:var(--mut);display:flex;
+align-items:center;gap:9px}}
+details.fold>summary:hover{{color:var(--fg)}}
+details.fold>summary::-webkit-details-marker{{display:none}}
+details.fold>summary::before{{content:"\\25B8";color:var(--hair);font-size:10px}}
+details.fold[open]>summary::before{{content:"\\25BE"}}
+details.fold>summary .c{{color:var(--faint);font-weight:500}}
+details.fold .body{{padding:2px 0 16px}}
+table.data{{width:100%;border-collapse:collapse;font-size:12.5px}}
+table.data th,table.data td{{text-align:left;padding:7px 14px 7px 0;
+border-bottom:1px solid var(--line);vertical-align:baseline}}
+table.data th{{color:var(--faint);font-weight:600;font-size:10.5px;
+text-transform:uppercase;letter-spacing:.05em}}
+table.data td.r{{font-variant-numeric:tabular-nums;white-space:nowrap}}
+.empty{{color:var(--faint);font-size:13px;padding:16px 0}}
+.t{{font-size:12px;color:var(--mut)}}
+.t.ok{{color:var(--ok)}}.t.warn{{color:var(--warn)}}.t.bad{{color:var(--bad)}}
+.cad{{color:var(--mut);font-size:12px;margin:18px 0 0}}
+.cad b{{color:var(--fg);font-weight:600}}
+footer{{margin:46px 0 0;padding-top:18px;border-top:1px solid var(--line);
+color:var(--mut);font-size:12px;line-height:1.7;max-width:92ch}}
+footer b{{color:var(--fg);font-weight:600}}
 """
+
+# The page's only script: set the saved theme before first paint (no flash) and
+# expose the toggle. Inline + tiny, so the page stays one self-contained file
+# with no external request; absent JS, the page simply follows the OS theme.
+_THEME_JS = (
+    "(function(){var k='froot-theme',r=document.documentElement,"
+    "s=localStorage.getItem(k);if(s)r.setAttribute('data-theme',s);"
+    "window.__toggleTheme=function(){var c=r.getAttribute('data-theme')||"
+    "(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');"
+    "var n=c==='dark'?'light':'dark';r.setAttribute('data-theme',n);"
+    "localStorage.setItem(k,n);};})();"
+)
 
 _CI_CLASS = {
     "passed": "ok",
@@ -258,17 +291,21 @@ def _header(model: DashboardModel) -> str:
         f'<span class="hmeta"><span>{sources}</span>'
         f"<span>{len(model.repos_configured)} repos</span>"
         f"<span>built {_ago(model.generated_at, model.generated_at)}"
-        " · reload to recompute</span></span>"
-        "</header>"
+        " · reload to recompute</span>"
+        '<button class="themetgl" type="button" onclick="__toggleTheme()"'
+        ' title="Toggle light / dark"'
+        ' aria-label="Toggle light or dark theme">&#9680;</button>'
+        "</span></header>"
     )
 
 
 # ── the gate hero (per loop) ─────────────────────────────────────────────────
 def _bearing(label: str, value: str, kind: str, *, armed: bool = False) -> str:
     cls = "bearing armed" if armed else "bearing"
+    dot = _dot("mute" if armed else kind)
     return (
         f'<div class="{cls}"><span class="bl">{escape(label)}</span>'
-        f'<span class="bv {kind}">{escape(value)}</span></div>'
+        f'<span class="bv {kind}">{dot}{escape(value)}</span></div>'
     )
 
 
@@ -316,18 +353,18 @@ def _gate_hero(view: LoopView) -> str:
         )
     if acting:
         out = (
-            '<div class="outcome act"><div class="ot">AUTO-MERGE</div>'
-            '<div class="os">a class is acting now</div></div>'
+            f'<div class="outcome act"><div class="ot">{_dot("ok")}AUTO-MERGE'
+            '</div><div class="os">a class is acting now</div></div>'
         )
     elif earned:
         out = (
-            '<div class="outcome act"><div class="ot">EARNED</div>'
+            f'<div class="outcome act"><div class="ot">{_dot("ok")}EARNED</div>'
             '<div class="os">acts where allowlisted</div></div>'
         )
     else:
         out = (
-            '<div class="outcome hold"><div class="ot">HOLD</div>'
-            '<div class="os">building the record</div></div>'
+            f'<div class="outcome hold"><div class="ot">{_dot("mute")}HOLD'
+            '</div><div class="os">building the record</div></div>'
         )
     flow = (
         '<div class="gateflow">'
@@ -368,10 +405,10 @@ def _class_table(view: LoopView) -> str:
 
 def _class_row(g: ClassGate) -> str:
     if g.earned:
-        gate = '<span class="pill ok">earned</span>'
+        gate = f'<span class="pill ok">{_dot("ok")}earned</span>'
     else:
         gate = (
-            f'<span class="pill hold">hold</span> '
+            f'<span class="pill hold">{_dot("mute")}hold</span> '
             f'<span class="mut">{escape(g.blocker or "")}</span>'
         )
     defect = "—" if g.defect_rate is None else _pct(g.defect_rate)
@@ -554,7 +591,7 @@ def _queue_sec(view: LoopView) -> str:
 
 def _queue_badge(row: BumpRow) -> str:
     if row.would_auto_merge:
-        return '<span class="pill ok">would auto-merge</span>'
+        return f'<span class="pill ok">{_dot("ok")}would auto-merge</span>'
     reason = row.held_reason or "held"
     return f'<span class="mut">held &middot; {escape(reason)}</span>'
 
@@ -739,7 +776,8 @@ def page(model: DashboardModel) -> str:
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         "<title>froot &middot; read-model</title>"
-        f"<style>{_CSS}{tabcss}</style></head><body>"
+        f"<style>{_CSS}{tabcss}</style>"
+        f"<script>{_THEME_JS}</script></head><body>"
         + "".join(inputs)
         + "<main>"
         + _header(model)
