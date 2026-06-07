@@ -25,6 +25,7 @@ from froot.policy.naming import branch_name
 if TYPE_CHECKING:
     from froot.domain.candidate import Candidate
     from froot.domain.changelog import ChangelogVerdict
+    from froot.domain.removal import Removal
     from froot.domain.repo import TargetRepo
 
 _LABEL_NAMESPACE = "froot"
@@ -130,6 +131,47 @@ def pull_request_draft(
             f"{_title_prefix(loop)}: bump {candidate.package} "
             f"to {candidate.target}"
         ),
+        body="\n".join(lines),
+    )
+
+
+def removal_pull_request_draft(
+    target: TargetRepo,
+    removal: Removal,
+    loop: Loop = Loop.DEPENDENCY_PATCH,
+) -> PullRequestDraft:
+    """Build the deterministic PR content for a removal (no model call).
+
+    A removal carries no changelog verdict (there is no new version to read);
+    its "why" is the ``justification`` the safe-to-remove veto recorded, so that
+    is what the body surfaces. The action rewrites the manifest and lockfile
+    (``npm uninstall`` edits both), which the body states so the diff matches.
+
+    Args:
+        target: The repo the PR is opened against (gives the base branch).
+        removal: The unused dependency being removed.
+        loop: Which loop is proposing — sets the branch namespace and the title
+            verb.
+
+    Returns:
+        A :class:`PullRequestDraft` ready for the forge to open.
+    """
+    section = "dev dependency" if removal.dev else "dependency"
+    lines = [
+        f"Removes the unused {section} `{removal.package}` "
+        f"from the manifest and lockfile.",
+    ]
+    if removal.justification is not None:
+        lines += ["", removal.justification]
+    lines += [
+        "",
+        "---",
+        "Opened by froot. froot does not merge; a human approves.",
+    ]
+    return PullRequestDraft(
+        branch=branch_name(removal, loop),
+        base=target.default_branch,
+        title=f"{_title_prefix(loop)}: remove {removal.package} (unused)",
         body="\n".join(lines),
     )
 

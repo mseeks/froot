@@ -8,9 +8,10 @@ from froot.policy.compose import (
     closed_on_red_comment,
     pr_labels,
     pull_request_draft,
+    removal_pull_request_draft,
 )
 from froot.policy.naming import branch_name
-from tests.support import make_candidate, make_repo
+from tests.support import make_candidate, make_removal, make_repo
 
 
 def test_security_draft_uses_security_namespace_and_justification():
@@ -32,6 +33,22 @@ def test_security_draft_uses_security_namespace_and_justification():
     assert draft.title == "security: bump left-pad to 1.3.0"
     assert draft.branch.value == "froot/security-patch/left-pad-1.3.0"
     assert "Clears GHSA-xxxx (CVE-1)." in draft.body
+
+
+def test_removal_draft_names_the_unused_dependency():
+    repo = make_repo("acme/widgets")
+    removal = make_removal(
+        package="left-pad",
+        dev=True,
+        justification="unused (knip); not imported",
+    )
+    draft = removal_pull_request_draft(repo, removal, Loop.DEPENDENCY_PATCH)
+    assert draft.title == "deps: remove left-pad (unused)"
+    assert draft.base == "main"
+    assert draft.branch == branch_name(removal, Loop.DEPENDENCY_PATCH)
+    assert "Removes the unused dev dependency `left-pad`" in draft.body
+    assert "unused (knip); not imported" in draft.body  # the safe-to-remove why
+    assert "a human approves" in draft.body
 
 
 def test_closed_on_red_comment_names_failing_checks():

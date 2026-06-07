@@ -171,12 +171,19 @@ async def test_judge_changelog_unknown_when_missing(
     assert isinstance(verdict, UnknownVerdict)
 
 
-async def test_bump_only_activity_rejects_a_removal():
-    # The bump activities narrow WorkItem -> Candidate at the boundary; a
-    # removal reaching one fails fast rather than passing silently, until the
-    # dead-code action lands and the boundary dispatches on kind instead.
-    with pytest.raises(TypeError, match="not a bump"):
-        await activities.judge_changelog(JudgeInput(candidate=make_removal()))
+async def test_judge_changelog_for_removal_is_clean_from_justification():
+    # A removal already cleared the safe-to-remove veto at scan; the in-workflow
+    # judge step carries that conclusion into the PR framing without fetching a
+    # changelog (there is none) or calling the model.
+    verdict = await activities.judge_changelog(
+        JudgeInput(
+            candidate=make_removal(
+                package="left-pad", justification="unused (knip); not imported"
+            )
+        )
+    )
+    assert isinstance(verdict, CleanVerdict)
+    assert verdict.rationale == "unused (knip); not imported"
 
 
 async def test_judge_changelog_uses_model(monkeypatch: pytest.MonkeyPatch):
@@ -236,6 +243,71 @@ async def test_open_pull_request_full_path(monkeypatch: pytest.MonkeyPatch):
     assert fake.checked_out is True
     assert package_manager.applied == make_candidate()
     assert fake.pushed is not None
+
+
+async def test_open_pull_request_removal_runs_remove_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The one place the action differs by kind: a removal calls
+    # remove_dependency (not apply_patch_bump) and uses the removal PR draft.
+    fake = FakeForge(existing_pr=None, opened_pr=make_pr(number=8))
+    package_manager = FakePackageManager()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod, "package_manager_for", lambda ecosystem: package_manager
+    )
+    removal = make_removal(package="left-pad")
+    params = OpenPrInput(
+        target=make_repo(),
+        candidate=removal,
+        verdict=CleanVerdict(rationale="safe to remove"),
+    )
+    pr = await activities.open_pull_request(params)
+    assert pr.number == 8
+    assert package_manager.applied is None  # no bump
+    assert package_manager.removed == [removal]  # the removal action ran
+    assert fake.pushed is not None
+
+
+async def test_gate_review_for_removal_uses_safe_to_remove_judge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The fourth leg for a removal re-runs the safe-to-remove judge (no
+    # changelog); a clean verdict approves the auto-merge.
+    judge = FakeJudge(removal_verdict=CleanVerdict(rationale="safe"))
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: judge)
+    removal = make_removal(package="left-pad")
+    # gate_review dispatches on the candidate kind, so the loop is irrelevant
+    # here (the dead-code loop lands in a later slice).
+    verdict = await activities.gate_review(
+        GateReviewInput(candidate=removal, pr=make_pr())
+    )
+    assert isinstance(verdict, CleanVerdict)
+    assert judge.removals == [removal]
+
+
+async def test_record_outcome_removal_logs_remove_action(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    fake = FakeForge()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    outcome = LoopOutcome(
+        candidate=make_removal(package="left-pad", dev=True),
+        verdict=CleanVerdict(rationale="safe to remove"),
+        pr=make_pr(),
+        ci=CIPassed(),
+    )
+    with caplog.at_level("INFO", logger="froot.outcome"):
+        await activities.record_outcome(
+            RecordInput(target=make_repo(), outcome=outcome)
+        )
+    records = [r for r in caplog.records if r.name == "froot.outcome"]
+    assert len(records) == 1
+    logged = json.loads(records[0].getMessage())
+    assert logged["action"] == "remove"
+    assert logged["package"] == "left-pad"
+    assert logged["dev"] is True
+    assert "from" not in logged  # no version fields for a removal
 
 
 async def test_check_ci(monkeypatch: pytest.MonkeyPatch):

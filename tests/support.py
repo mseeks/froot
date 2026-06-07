@@ -307,13 +307,21 @@ class FakeJudge:
         self,
         verdict: ChangelogVerdict | None = None,
         gate_verdict: ChangelogVerdict | None = None,
+        removal_verdict: ChangelogVerdict | None = None,
     ) -> None:
         self.verdict: ChangelogVerdict = verdict or CleanVerdict(rationale="ok")
         # The gate reviewer's verdict; defaults to the judge's, so an
         # unconfigured fake approves a clean bump at the gate too.
         self.gate_verdict: ChangelogVerdict = gate_verdict or self.verdict
+        # The safe-to-remove verdict; defaults to clean, so an unconfigured fake
+        # lets a removal through the veto.
+        self.removal_verdict: ChangelogVerdict = (
+            removal_verdict or CleanVerdict(rationale="safe to remove")
+        )
         self.loops: list[Loop] = []
         self.gate_loops: list[Loop] = []
+        # Every removal judged, in order, so the veto tests can assert it.
+        self.removals: list[Removal] = []
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
@@ -326,3 +334,7 @@ class FakeJudge:
     ) -> ChangelogVerdict:
         self.gate_loops.append(loop)
         return self.gate_verdict
+
+    async def judge_removal(self, removal: Removal) -> ChangelogVerdict:
+        self.removals.append(removal)
+        return self.removal_verdict

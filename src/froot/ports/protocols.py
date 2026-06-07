@@ -249,3 +249,13 @@ class ModelJudge(Protocol):
         disagree — the fourth trust leg (§3.7).
         """
         ...
+
+    async def judge_removal(self, removal: Removal) -> ChangelogVerdict:
+        """Assess whether an unused dependency is safe to remove.
+
+        The dead-code loop's thin judgment, framed as a veto: ``clean`` means
+        safe to remove (the loop proposes it); ``risky``/``unknown`` hold it
+        back, so a tool used without an import (pytest, eslint) never becomes a
+        noisy PR. Same verdict shape as :meth:`judge`, a different prompt.
+        """
+        ...

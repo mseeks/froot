@@ -19,13 +19,22 @@ from typing import TYPE_CHECKING, assert_never
 from temporalio import activity
 
 from froot.domain.candidate import Candidate
-from froot.domain.changelog import ChangelogVerdict, UnknownVerdict
+from froot.domain.changelog import (
+    ChangelogVerdict,
+    CleanVerdict,
+    UnknownVerdict,
+)
 from froot.domain.ci import CIStatus
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
 from froot.domain.loop import Loop
-from froot.domain.pull_request import PullRequestRef
+from froot.domain.pull_request import PullRequestDraft, PullRequestRef
+from froot.domain.removal import Removal
 from froot.domain.repo import TargetRepo
-from froot.policy.compose import pr_labels, pull_request_draft
+from froot.policy.compose import (
+    pr_labels,
+    pull_request_draft,
+    removal_pull_request_draft,
+)
 from froot.policy.determinism import analyze_workflow_surface
 from froot.policy.naming import (
     branch_name,
@@ -53,7 +62,6 @@ from froot.workflow.types import (
 )
 
 if TYPE_CHECKING:
-    from froot.domain.work import WorkItem
     from froot.ports.protocols import PackageManager
 
 _log = logging.getLogger("froot.outcome")
@@ -68,21 +76,17 @@ def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
     return workspace / target.manifest_dir if target.manifest_dir else workspace
 
 
-def _bump(item: WorkItem) -> Candidate:
-    """Narrow a work item to a dependency bump at the activity boundary.
-
-    The bump activities — the changelog judge/review, the manifest edit, the
-    version telemetry — are defined only over a :class:`Candidate`. Only bumps
-    reach them today, so this makes that explicit and type-safe: a stray
-    non-bump raises rather than passing silently. When the dead-code action
-    lands, the impure boundary dispatches on ``item.kind`` at these sites
-    instead of narrowing (the pure spine already carries the generic work item).
-    """
-    if not isinstance(item, Candidate):
-        raise TypeError(
-            f"bump activity received a {item.kind} work item, not a bump"
-        )
-    return item
+def _draft_for(params: OpenPrInput) -> PullRequestDraft:
+    """Build the PR draft for the work item — bump vs removal compose."""
+    item = params.candidate
+    match item:
+        case Candidate():
+            return pull_request_draft(
+                params.target, item, params.verdict, params.loop
+            )
+        case Removal():
+            return removal_pull_request_draft(params.target, item, params.loop)
+    assert_never(item)
 
 
 async def _select_candidates(
@@ -199,7 +203,15 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
-    changelog = await HttpChangelogSource().fetch(_bump(params.candidate))
+    candidate = params.candidate
+    if isinstance(candidate, Removal):
+        # A removal already cleared the safe-to-remove veto at scan; there is no
+        # changelog to read, so carry that conclusion straight into the PR
+        # framing (the rationale the veto recorded on the work item).
+        return CleanVerdict(
+            rationale=candidate.justification or "unused; safe to remove"
+        )
+    changelog = await HttpChangelogSource().fetch(candidate)
     if changelog is None:
         return UnknownVerdict(rationale="No changelog could be fetched.")
     try:
@@ -230,25 +242,47 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
     from froot.adapters.changelog_http import HttpChangelogSource
     from froot.adapters.model_judge import PydanticAiJudge
 
-    changelog = await HttpChangelogSource().fetch(_bump(params.candidate))
-    if changelog is None:
-        verdict: ChangelogVerdict = UnknownVerdict(
-            rationale="No changelog to review; holding (fail-closed)."
-        )
-    else:
+    candidate = params.candidate
+    verdict: ChangelogVerdict
+    if isinstance(candidate, Removal):
+        # The fourth leg for a removal: independently re-judge that it is safe
+        # to remove (the same check the scan veto ran). No changelog to read;
+        # fail-CLOSED to a hold on a model error, like the bump path.
         try:
-            verdict = await PydanticAiJudge().gate_review(
-                changelog, params.loop
-            )
+            verdict = await PydanticAiJudge().judge_removal(candidate)
         except Exception as exc:
             activity.logger.warning(
-                "gate reviewer unavailable for %s; holding: %r",
-                params.candidate.package,
+                "safe-to-remove gate review unavailable for %s; holding: %r",
+                candidate.package,
                 exc,
             )
             verdict = UnknownVerdict(
-                rationale=f"Gate reviewer unavailable ({type(exc).__name__})."
+                rationale=(
+                    f"Removal reviewer unavailable ({type(exc).__name__})."
+                )
             )
+    else:
+        changelog = await HttpChangelogSource().fetch(candidate)
+        if changelog is None:
+            verdict = UnknownVerdict(
+                rationale="No changelog to review; holding (fail-closed)."
+            )
+        else:
+            try:
+                verdict = await PydanticAiJudge().gate_review(
+                    changelog, params.loop
+                )
+            except Exception as exc:
+                activity.logger.warning(
+                    "gate reviewer unavailable for %s; holding: %r",
+                    candidate.package,
+                    exc,
+                )
+                verdict = UnknownVerdict(
+                    rationale=(
+                        f"Gate reviewer unavailable ({type(exc).__name__})."
+                    )
+                )
     _gate_log.info(
         json.dumps(
             {
@@ -267,7 +301,13 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
 
 @activity.defn
 async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
-    """Regenerate manifest+lockfile and open (idempotently) the bump's PR."""
+    """Rewrite the manifest+lockfile and open (idempotently) the work item's PR.
+
+    The one place the action differs by work-item kind: a bump regenerates the
+    lockfile at the target version, a removal deletes the dependency. Both are
+    lockfile-only (no install, no scripts); everything around them — the dedup
+    branch, the checkout, the push, the open — is the same chassis.
+    """
     from froot.adapters.github import GitHubForge
     from froot.adapters.registry import package_manager_for
 
@@ -277,16 +317,17 @@ async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
     existing = await forge.find_open_pull_request(params.target, branch)
     if existing is not None:
         return existing
-    candidate = _bump(params.candidate)
-    draft = pull_request_draft(
-        params.target, candidate, params.verdict, params.loop
-    )
+    draft = _draft_for(params)
+    item = params.candidate
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
         await forge.checkout(params.target, workspace)
-        await package_manager.apply_patch_bump(
-            candidate, _manifest_dir(params.target, workspace)
-        )
+        manifest_dir = _manifest_dir(params.target, workspace)
+        match item:
+            case Candidate():
+                await package_manager.apply_patch_bump(item, manifest_dir)
+            case Removal():
+                await package_manager.remove_dependency(item, manifest_dir)
         await forge.push_branch(workspace, branch, draft.title)
     return await forge.open_pull_request(params.target, draft)
 
@@ -312,29 +353,33 @@ async def record_outcome(params: RecordInput) -> None:
     from froot.policy.environment import env_label
 
     outcome = params.outcome
-    bump = _bump(outcome.candidate)
+    item = outcome.candidate
     labels = (
         *pr_labels(params.loop),
         env_label(ModelSettings().ollama_model),
     )
     await GitHubForge().add_labels(params.target, outcome.pr.number, labels)
-    _log.info(
-        json.dumps(
-            {
-                "event": "loop_outcome",
-                "loop": params.loop.value,
-                "repo": params.target.repo.slug,
-                "package": bump.package,
-                "from": str(bump.current),
-                "to": str(bump.target),
-                "changelog": outcome.verdict.kind,
-                "ci": outcome.ci.kind,
-                "ci_passed": outcome.ci_passed,
-                "pr": outcome.pr.number,
-                "pr_url": outcome.pr.url,
+    record = {
+        "event": "loop_outcome",
+        "loop": params.loop.value,
+        "repo": params.target.repo.slug,
+        "package": item.package,
+        "changelog": outcome.verdict.kind,
+        "ci": outcome.ci.kind,
+        "ci_passed": outcome.ci_passed,
+        "pr": outcome.pr.number,
+        "pr_url": outcome.pr.url,
+    }
+    match item:
+        case Candidate():
+            record |= {
+                "action": "bump",
+                "from": str(item.current),
+                "to": str(item.target),
             }
-        )
-    )
+        case Removal():
+            record |= {"action": "remove", "dev": item.dev}
+    _log.info(json.dumps(record))
 
 
 @activity.defn

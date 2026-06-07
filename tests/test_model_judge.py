@@ -13,7 +13,7 @@ from froot.domain.changelog import (
     RiskyVerdict,
     UnknownVerdict,
 )
-from tests.support import ver
+from tests.support import make_removal, ver
 
 
 def test_assessment_to_verdict_clean():
@@ -55,4 +55,12 @@ async def test_gate_review_wires_through_its_own_model_offline():
         package="left-pad", version=ver("1.4.3"), text="Fixed a typo."
     )
     verdict = await judge.gate_review(changelog)
+    assert verdict.kind in {"clean", "risky", "unknown"}
+
+
+async def test_judge_removal_wires_through_a_model_offline():
+    # The safe-to-remove judge is a third agent over the shared _Assessment
+    # shape; an injected model drives it offline (no changelog needed).
+    judge = PydanticAiJudge(model=TestModel())
+    verdict = await judge.judge_removal(make_removal(package="left-pad"))
     assert verdict.kind in {"clean", "risky", "unknown"}

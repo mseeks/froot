@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
     from froot.domain.changelog import Changelog, ChangelogVerdict
+    from froot.domain.removal import Removal
 
 _SYSTEM_PROMPT = (
     "You assess the changelog of a dependency upgrade for a code-maintenance "
@@ -63,6 +64,30 @@ _GATE_SYSTEM_PROMPT = (
     "The burden is on the changelog to prove safety: when in doubt, do NOT "
     "return clean. Base concerns on what the text says; keep it to one or two "
     "sentences."
+)
+
+
+# The dead-code loop's thin judgment: a static analyzer flagged a dependency as
+# never imported, but "not imported" is not "unused" — CLI/test/build tools
+# (pytest, eslint, tsc), framework plugins, type-only/peer deps, and dynamically
+# loaded packages are all used without an import. This judge vetoes those so the
+# loop never opens a noisy "remove pytest" PR; CI is still the final oracle, but
+# a wrong removal wastes a human's time, so the burden is on "safe".
+_REMOVAL_SYSTEM_PROMPT = (
+    "You decide whether an UNUSED dependency is safe to remove from a project, "
+    "for a code-maintenance bot. A static analyzer flagged it as never "
+    "imported in the source. But 'not imported' does not always mean "
+    "'unused'.\n"
+    "Return one verdict:\n"
+    "- clean: a normal library that, if genuinely never imported, the build no "
+    "longer needs — safe to remove. This proposes the removal.\n"
+    "- risky: plausibly used WITHOUT an import — a CLI/test/build tool run as "
+    "a command (e.g. pytest, eslint, prettier, tsc, ruff), a framework or "
+    "bundler plugin, a type-only or peer dependency, or something loaded "
+    "dynamically or via config. Say which. This holds it back (no PR).\n"
+    "- unknown: you cannot tell. This holds it back.\n"
+    "CI is the final check, but a wrong removal wastes a human's time, so when "
+    "in doubt do NOT return clean. Keep the rationale to one or two sentences."
 )
 
 
@@ -123,6 +148,18 @@ def _changelog_prompt(changelog: Changelog, loop: Loop) -> str:
     )
 
 
+def _removal_prompt(removal: Removal) -> str:
+    """The user prompt for the safe-to-remove judge: the flagged dependency."""
+    declared = "a dev dependency" if removal.dev else "a runtime dependency"
+    return (
+        f"Package: {removal.package}\n"
+        f"Ecosystem: {removal.ecosystem.value}\n"
+        f"Declared as: {declared}\n"
+        f"Detector note: {removal.justification or 'flagged as unused'}\n"
+        "Is this safe to remove?"
+    )
+
+
 class PydanticAiJudge:
     """A :class:`~froot.ports.protocols.ModelJudge` backed by Pydantic AI.
 
@@ -150,6 +187,14 @@ class PydanticAiJudge:
             output_type=_Assessment,
             system_prompt=_GATE_SYSTEM_PROMPT,
         )
+        # The dead-code loop's safe-to-remove judge; the neutral model, its own
+        # prompt. It is a veto (clean = propose), so it carries real weight —
+        # but CI remains the oracle.
+        self._removal_agent: Agent[None, _Assessment] = Agent(
+            model or build_model(),
+            output_type=_Assessment,
+            system_prompt=_REMOVAL_SYSTEM_PROMPT,
+        )
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
@@ -163,4 +208,14 @@ class PydanticAiJudge:
     ) -> ChangelogVerdict:
         """Adversarially re-review a bump at the gate (clean = approve)."""
         result = await self._gate_agent.run(_changelog_prompt(changelog, loop))
+        return assessment_to_verdict(result.output)
+
+    async def judge_removal(self, removal: Removal) -> ChangelogVerdict:
+        """Assess whether an unused dependency is safe to remove (clean = yes).
+
+        The dead-code loop's veto: ``clean`` lets the removal become a PR; any
+        other verdict holds it back. Same ``_Assessment`` shape as the changelog
+        judge, a different prompt.
+        """
+        result = await self._removal_agent.run(_removal_prompt(removal))
         return assessment_to_verdict(result.output)
