@@ -102,6 +102,12 @@ _CI_CLASS = {
     "timed_out": "warn",
 }
 _VERDICT_CLASS = {"clean": "ok", "risky": "warn", "unknown": "mut"}
+_POST_MERGE_CLASS = {
+    "held": "ok",
+    "broke": "bad",
+    "reverted": "bad",
+    "unknown": "mut",
+}
 
 
 def _aware(when: datetime) -> datetime:
@@ -257,11 +263,22 @@ def _rate_cell(rate: float | None) -> str:
 
 
 def _earned_cell(g: ClassGate) -> str:
-    """A class's gate standing: a green 'earned', else the muted blocker."""
+    """A class's gate standing: a green 'earned', else the muted blocker.
+
+    A model change resets the record (§3.7), which can read as a mysterious drop
+    to zero; when prior-environment history exists, it is named so the reset is
+    legible rather than alarming.
+    """
+    reset = (
+        f' <span class="mut">&middot; reset: {g.prior_env_decided} under a '
+        "prior env</span>"
+        if g.prior_env_decided
+        else ""
+    )
     if g.earned:
-        return f'{_dot("ok")}<span class="ok">earned</span>'
+        return f'{_dot("ok")}<span class="ok">earned</span>{reset}'
     blocker = escape(g.blocker or "not earned")
-    return f'{_dot("mut")}<span class="mut">{blocker}</span>'
+    return f'{_dot("mut")}<span class="mut">{blocker}</span>{reset}'
 
 
 def _budget_cell(g: ClassGate) -> str:
@@ -272,11 +289,25 @@ def _budget_cell(g: ClassGate) -> str:
     )
 
 
-def _class_gates(model: DashboardModel) -> str:
-    """The earned-autonomy panel — the shadow gate's per-class standing.
+def _defect_cell(g: ClassGate) -> str:
+    """The post-merge defect bearing: rate over confirmed-held outcomes."""
+    if g.determined == 0:
+        return '<span class="mut">— (0 confirmed)</span>'
+    rate = g.defect_rate if g.defect_rate is not None else 0.0
+    cls = "ok" if g.defects == 0 else "bad"
+    return (
+        f'<span class="{cls}">{rate * 100:.0f}%</span>'
+        f' <span class="mut">({g.defects}/{g.determined})</span>'
+    )
 
-    Read-only: it renders whether each (repo, loop) class *would* have earned a
-    gate move, and the steward-budget that move would reclaim. Nothing acts.
+
+def _class_gates(model: DashboardModel) -> str:
+    """The earned-autonomy panel — the gate's per-class standing.
+
+    Renders whether each (repo, loop) class has earned its gate move (the two
+    record bearings: rate + defect rate) and the steward-budget that move
+    reclaims. On an allowlisted repo a met gate auto-merges; elsewhere — the
+    default — it is the advisory shadow gate a steward watches.
     """
     gates = model.class_gates
     if not gates:
@@ -291,6 +322,7 @@ def _class_gates(model: DashboardModel) -> str:
             f'<td class="mut">{escape(g.loop)}</td>'
             f"<td>{g.decided} in {g.window_days}d</td>"
             f"<td>{_rate_cell(g.merge_rate)}</td>"
+            f"<td>{_defect_cell(g)}</td>"
             f"<td>{_earned_cell(g)}</td>"
             f"<td>{_budget_cell(g)}</td>"
             "</tr>"
@@ -298,25 +330,30 @@ def _class_gates(model: DashboardModel) -> str:
         )
         body = (
             "<table><thead><tr><th>repo</th><th>loop</th><th>decided</th>"
-            "<th>rate</th><th>gate</th><th>budget / week</th></tr></thead>"
+            "<th>rate</th><th>defect</th><th>gate</th><th>budget / week</th>"
+            "</tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
     note = (
         '<p class="note">Each <b>class</b> is one loop on one repo &mdash; a '
         "distinct trust unit (a security patch is not a version bump, and they "
-        "never share a record). A class earns its gate from a high enough "
-        "<b>approval rate</b> over enough recently-<b>decided</b> PRs; the "
-        "window keeps trust recent, not lifetime. <b>Budget</b> reads the "
-        "gate in steward-time &mdash; approvals/week is what the class costs "
-        "a human now, reclaimable is the clean-and-green slice a gate move "
-        "would hand back. <b>Advisory only</b>: auto-merge is allowlist-gated "
-        "and off, and the approval rate counts a human <i>merge</i>, not a "
-        "confirmed-good outcome &mdash; with no revert tracking yet, a high "
-        "rate can still mask rubber-stamping (&sect;3.7). Rollback tracking "
-        "and sampled review come before anything acts.</p>"
+        "never share a record). A class earns its gate by <b>triangulation</b> "
+        "(&sect;3.8): a high enough <b>approval rate</b> over enough "
+        "recently-<b>decided</b> PRs <i>and</i> a low <b>defect rate</b> over "
+        "enough confirmed-held merges &mdash; two bearings that fail "
+        "differently (the rate to rubber-stamping, the defect rate to a weak "
+        "oracle), so they can&rsquo;t both lie at once. The window keeps trust "
+        "recent. <b>Budget</b> reads the gate in steward-time: approvals/week "
+        "the class costs now &rarr; the reclaimable slice a move hands back. "
+        "Two further legs guard the live merge beyond this panel: an "
+        "<b>adversarial gate self-test</b> (a known-bad class must never be "
+        "granted) and an <b>independent deep review</b> of each bump at merge. "
+        "Where a repo is <b>allowlisted</b> a met gate auto-merges; the "
+        "allowlist is empty by default &mdash; the revocable switch &mdash; so "
+        "elsewhere this stays advisory.</p>"
     )
     return (
-        "<section><h2>Earned autonomy &middot; the shadow gate</h2>"
+        "<section><h2>Earned autonomy &middot; the gate</h2>"
         f"{body}{_why(note)}</section>"
     )
 
@@ -344,6 +381,79 @@ def _verification(model: DashboardModel) -> str:
         )
     return (
         "<section><h2>Verification &middot; CI is the oracle</h2>"
+        f'<div class="stats">{stats}</div>{note}</section>'
+    )
+
+
+def _reliability(model: DashboardModel) -> str:
+    r = model.reliability
+    rate = "—" if r.defect_rate is None else f"{r.defect_rate * 100:.0f}%"
+    stats = "".join(
+        (
+            _stat(r.held, "held"),
+            _stat(r.broke, "broke"),
+            _stat(r.reverted, "reverted"),
+            _stat(r.unverified, "unverified"),
+            _stat(rate, "defect rate"),
+        )
+    )
+    if r.determined == 0:
+        note = (
+            '<p class="note">No post-merge outcomes determined yet '
+            f"(last {r.window_days}d). A merge is only a *success* once it "
+            "holds; until then it&rsquo;s just merged.</p>"
+        )
+    else:
+        note = _why(
+            '<p class="note">Did the merge <b>hold</b>? &mdash; the outcome '
+            "leg, the only bearing that watches what actually shipped. "
+            f"<b>{r.determined}</b> of the recent merges were classifiable; "
+            "the defect rate is a <b>floor</b>, not the truth: it sees the "
+            "branch&rsquo;s CI and git-reverts, but a <i>manual</i> or "
+            "<i>bundled</i> revert (most of them) is invisible. "
+            '<span class="mut">&lsquo;unverified&rsquo; means no branch '
+            "oracle &mdash; never counted as held.</span></p>"
+        )
+    return (
+        "<section><h2>Reliability &middot; did the merge hold?</h2>"
+        f'<div class="stats">{stats}</div>{note}</section>'
+    )
+
+
+def _probes(model: DashboardModel) -> str:
+    p = model.probes
+    stats = "".join(
+        (
+            _stat(p.caught, "caught"),
+            _stat(p.escaped, "escaped"),
+            _stat(p.pending, "pending"),
+        )
+    )
+    if p.total == 0:
+        note = (
+            '<p class="note">No adversarial probes yet. A <b>canary</b> '
+            "&mdash; a deliberately-bad bump &mdash; tests whether the "
+            "guardrail still bites; it needs no volume to be informative, so "
+            "it carries weight while the rate-based bearings are thin "
+            "(&sect;2.11).</p>"
+        )
+    elif p.escaped:
+        note = (
+            f'<p class="note"><span class="bad">&#9888; <b>{p.escaped}</b> '
+            "canary(s) <b>escaped</b> &mdash; a known-bad bump landed, so the "
+            "guardrail has a hole.</span> This is the alarm the probe exists "
+            "to raise.</p>"
+        )
+    else:
+        note = _why(
+            '<p class="note">Every canary was <b>caught</b> &mdash; the '
+            "guardrail refused the planted bad bumps. Probes are scored on a "
+            "strict bar (a canary must never merge) and kept <b>out</b> of the "
+            "track record and defect rate, so a synthetic failure never "
+            "pollutes the real bearings.</p>"
+        )
+    return (
+        "<section><h2>Adversarial probes &middot; does the guardrail bite?</h2>"
         f'<div class="stats">{stats}</div>{note}</section>'
     )
 
@@ -376,11 +486,12 @@ def _judgment(model: DashboardModel) -> str:
 
 
 def _shadow_badge(row: BumpRow) -> str:
-    """Whether this open PR *would* auto-merge under its class's grant.
+    """Whether this open PR meets its class's auto-merge grant.
 
-    Advisory: a green 'would auto-merge' means every condition is met and the
-    human approval is the only thing still in the way; otherwise the first
-    blocker, muted, so the held reason is the thing to fix.
+    These PRs are still open, so on an allowlisted repo a met grant would
+    already have merged: a green 'would auto-merge' here means the grant is met
+    but the repo is not allowlisted (or a deeper check held it), so it is still
+    yours. Otherwise the first blocker, muted — the held reason to fix.
     """
     if row.would_auto_merge:
         return '<span class="ok">would auto-merge</span>'
@@ -403,13 +514,15 @@ def _gate(model: DashboardModel) -> str:
             for row in model.gate
         )
         note = _why(
-            '<p class="note">The <b>shadow gate</b> column is advisory &mdash; '
-            "froot acts on nothing. A green &lsquo;would auto-merge&rsquo; "
-            "means this PR met its class&rsquo;s grant and the human approval "
-            "is the only remaining step; it rests on the single CI oracle and "
-            "a merge-rate record, which (esp. for a security patch) is not the "
-            "same as a confirmed-good or security-reviewed outcome. You still "
-            "own every merge.</p>"
+            '<p class="note">These PRs are open and <b>yours</b>. A green '
+            "&lsquo;would auto-merge&rsquo; means this PR met its "
+            "class&rsquo;s grant &mdash; on an allowlisted repo the loop would "
+            "have merged it already, so its presence here means the repo is "
+            "not allowlisted (or a deeper check held it). The verdict rests on "
+            "the single CI "
+            "oracle and a merge-rate record, which (esp. for a security patch) "
+            "is not the same as a confirmed-good or security-reviewed outcome. "
+            "You own every open merge.</p>"
         )
         body = (
             "<table><thead><tr><th>package</th><th>waiting</th>"
@@ -435,6 +548,7 @@ def _bumps(model: DashboardModel) -> str:
             f"<td>{_tag(row.verdict, _VERDICT_CLASS)}</td>"
             f"<td>{_tag(row.ci, _CI_CLASS)}</td>"
             f"<td>{_state_tag(row.state)}</td>"
+            f"<td>{_tag(row.post_merge, _POST_MERGE_CLASS)}</td>"
             f'<td class="mut">{escape(_ago(row.opened_at, now))}</td>'
             f"<td>{_pr_link(row)}</td>"
             "</tr>"
@@ -442,7 +556,8 @@ def _bumps(model: DashboardModel) -> str:
         )
         body = (
             "<table><thead><tr><th>package</th><th>bump</th><th>verdict</th>"
-            "<th>ci</th><th>state</th><th>opened</th><th>pr</th></tr></thead>"
+            "<th>ci</th><th>state</th><th>held?</th><th>opened</th><th>pr</th>"
+            "</tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
     return f"<section><h2>Bumps &middot; the detail</h2>{body}</section>"
@@ -594,16 +709,19 @@ def _reviews(model: DashboardModel) -> str:
 def _footer() -> str:
     return (
         "<footer>"
-        "<b>Authority envelope.</b> Stage 1 &mdash; froot holds "
-        "<b>write authority</b> only: it opens PRs, a human approves every "
-        "merge (commit authority = none). Trust, when any is granted, is "
-        "earned, narrow to a single loop on a single repo (a version bump is "
-        "not a security patch; they never share a record), conditional on its "
-        'environment (judge <span class="mono">gemma4:e4b</span>, '
-        "lockfile-only regen), revocable, and time-expiring. Today it records "
-        "the track "
-        "record and renders a <b>shadow gate</b> &mdash; a dry run of the "
-        "auto-merge decision that still acts on nothing.<br>"
+        "<b>Authority envelope.</b> froot holds <b>write authority</b> "
+        "everywhere (it opens PRs) and conditional <b>merge authority</b> "
+        "only on an allowlisted repo where the class has earned its gate "
+        "&mdash; the allowlist is empty by default, so commit authority is "
+        "none until a steward opts a repo in. Trust, when granted, is earned, "
+        "narrow to a single loop on a single repo (a version bump is not a "
+        "security patch; they never share a record), conditional on its "
+        "environment (judge "
+        '<span class="mono">gemma4:12b</span>, lockfile-only regen), revocable '
+        "(the allowlist), and time-expiring. A met gate auto-merges only "
+        "after passing an independent deep review; everywhere not allowlisted "
+        "the same verdict is the advisory <b>shadow gate</b> a steward "
+        "watches.<br>"
         "Everything above is derived on this request from GitHub (outcomes) + "
         "Temporal (runs) + ClickHouse (telemetry). froot keeps no database; "
         "reload to recompute."
@@ -728,6 +846,8 @@ def page(model: DashboardModel) -> str:
                 _track_record(model),
                 _class_gates(model),
                 _verification(model),
+                _reliability(model),
+                _probes(model),
                 _judgment(model),
                 _gate(model),
                 _bumps(model),

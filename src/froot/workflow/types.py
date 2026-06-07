@@ -53,6 +53,18 @@ class ReconcileInput(Frozen):
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
+class GateSelfTestInput(Frozen):
+    """Input to the gate self-test activity (the adversarial probe's stimulus).
+
+    The probe is policy-scoped, not repo-scoped — it tests the *live gate*, the
+    same for every repo. ``target``/``loop`` ride along only as log context, so
+    the alarm names the tick that fired it.
+    """
+
+    target: TargetRepo
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
 class ScanResult(Frozen):
     """The result of one scan tick.
 
@@ -95,6 +107,18 @@ class JudgeInput(Frozen):
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 
+class GateReviewInput(Frozen):
+    """Input to the gate-review activity (the fourth trust leg's deep read).
+
+    The candidate to re-read and the PR it is about to merge (for the log); the
+    loop frames the adversarial prompt just as the first judge pass is framed.
+    """
+
+    candidate: Candidate
+    pr: PullRequestRef
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
 class OpenPrInput(Frozen):
     """Input to the open-pull-request activity."""
 
@@ -132,6 +156,27 @@ class CloseInput(Frozen):
     target: TargetRepo
     pr: PullRequestRef
     failing: tuple[str, ...] = ()
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class MergeInput(Frozen):
+    """Input to the merge-pull-request activity (the acting gate's write)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+    loop: Loop = Loop.DEPENDENCY_PATCH
+
+
+class AutoMergeInput(Frozen):
+    """Input to the auto-merge-eligibility activity (the class-level grant).
+
+    The activity asks whether this ``(target, loop)`` class has *earned* the
+    auto-merge grant on an allowlisted repo — the class-level half of the gate
+    the pure machine can't compute (it needs the class's history). A no-op
+    returning False for any repo a steward has not allowlisted.
+    """
+
+    target: TargetRepo
     loop: Loop = Loop.DEPENDENCY_PATCH
 
 

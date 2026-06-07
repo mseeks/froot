@@ -76,9 +76,14 @@ class BumpRow(Frozen):
         merged_at: When the PR was merged, if it was.
         ttm_minutes: Time-to-merge in minutes (merged - opened), if merged.
         age_hours: Age in hours for a still-open PR (now - opened), or ``None``.
-        would_auto_merge: For an open PR, whether it would auto-merge under the
-            advisory earned-autonomy grant (the shadow gate; nothing acts).
+        would_auto_merge: For an open PR, whether it meets the earned-autonomy
+            grant — the loop's actual merge decision on an allowlisted repo, the
+            advisory shadow-gate verdict everywhere else (the default).
         held_reason: Why an open PR would *not* auto-merge, the first blocker.
+        post_merge: For a merged PR, whether the merge *held* — ``held`` (the
+            branch's CI stayed green after the merge), ``broke`` (it went red),
+            ``reverted`` (a later commit reverted it), or ``None`` when no
+            post-merge signal is recoverable (the outcome leg, coarse).
     """
 
     repo: str
@@ -97,10 +102,14 @@ class BumpRow(Frozen):
     age_hours: float | None
     would_auto_merge: bool = False
     held_reason: str | None = None
+    post_merge: str | None = None
+    # The judgment environment (judge-model slug) the PR was opened under, or
+    # ``None`` if unstamped; the gate counts only the current env (§3.7).
+    env: str | None = None
 
 
 class ClassGate(Frozen):
-    """The earned-autonomy standing of one (repo, loop) class — advisory only.
+    """The earned-autonomy standing of one (repo, loop) class.
 
     The MHE economics of approval (§3.6) made legible: a class earns its gate
     move with a high enough approval rate over enough recently-decided PRs,
@@ -112,6 +121,14 @@ class ClassGate(Frozen):
         decided: PRs decided (merged or closed) in the recent window.
         merged: How many of those were merged.
         merge_rate: ``merged / decided``, or ``None`` if none decided.
+        determined: Merges with a confirmed post-merge outcome in the window
+            (held / broke / reverted) — the defect bearing's evidence.
+        defects: Of those, how many broke the branch or were reverted.
+        defect_rate: ``defects / determined``, or ``None`` if none determined —
+            the second, independent bearing the gate triangulates against.
+        prior_env_decided: Decided PRs in the window earned under a *different*
+            (or no) environment — they no longer count, so this figure makes a
+            model-change reset legible rather than a mysterious drop to zero.
         earned: Whether the class has earned its gate move under the policy.
         blocker: Why it has not, if it has not (else ``None``).
         approvals_per_week: The steward approvals this class costs now
@@ -127,6 +144,10 @@ class ClassGate(Frozen):
     decided: int
     merged: int
     merge_rate: float | None
+    determined: int
+    defects: int
+    defect_rate: float | None
+    prior_env_decided: int
     earned: bool
     blocker: str | None
     approvals_per_week: float
@@ -229,6 +250,59 @@ class Verification(Frozen):
     with_reading: int
 
 
+class Reliability(Frozen):
+    """Did the merges *hold*? — the post-merge outcome leg (coarse, low-recall).
+
+    A merge is not the same as a success: the success leg is whether the merge
+    *held* once it landed. This breaks recent merges into held / broke /
+    reverted, with the honest caveat that it sees only what the default branch's
+    CI and git-reverts reveal — a manual or bundled revert is invisible, so the
+    defect rate is a *floor*, not the truth. It is the natural-traffic bearing
+    the adversarial canary leg exercises.
+
+    Attributes:
+        held: Merges whose branch CI stayed green after the merge.
+        broke: Merges whose branch CI went red after the merge.
+        reverted: Merges a later commit git-reverted (the minority that are).
+        unverified: Merges with no recoverable post-merge signal (no branch
+            oracle, or aged past the commit window) — never counted as held.
+        determined: ``held + broke + reverted`` — merges actually classified.
+        defect_rate: ``(broke + reverted) / determined``, or ``None`` if none
+            were determined. A floor on the true defect rate, by construction.
+        window_days: The look-back window over merges considered.
+    """
+
+    held: int
+    broke: int
+    reverted: int
+    unverified: int
+    determined: int
+    defect_rate: float | None
+    window_days: int
+
+
+class Probes(Frozen):
+    """Adversarial canary probes — does the guardrail still bite? (§2.11).
+
+    A canary is a deliberately-bad bump planted to test the guardrail; a healthy
+    loop must refuse to merge it. These counts are kept **strictly apart** from
+    the genuine track record and defect rate — a synthetic failure must never
+    pollute the real bearings — and shown on their own. ``escaped > 0`` is the
+    alarm: a known-bad bump that landed means the guardrail has a hole.
+
+    Attributes:
+        caught: Probes the guardrail refused (closed, or never landed).
+        escaped: Probes that merged anyway — a guardrail hole (should be 0).
+        pending: Probes still in flight (open, no verdict yet).
+        total: All canary probes seen.
+    """
+
+    caught: int
+    escaped: int
+    pending: int
+    total: int
+
+
 class Judgment(Frozen):
     """The model's changelog-verdict mix and its calibration against CI.
 
@@ -325,8 +399,10 @@ class DashboardModel(Frozen):
         sources: Per-source health for this request.
         scan_loops: Liveness of each repo's scan schedule.
         track_record: The reputation headline.
-        class_gates: The earned-autonomy standing per (repo, loop) — advisory.
+        class_gates: The earned-autonomy standing per (repo, loop) — the gate.
         verification: The CI-oracle breakdown.
+        reliability: Did the merges hold post-merge (the outcome leg, coarse).
+        probes: Adversarial canary results, kept apart from the real bearings.
         judgment: The model-verdict mix and calibration.
         gate: Open PRs awaiting a human, the freshest last.
         bumps: Every proposed bump, newest first (the detail behind the stats).
@@ -346,6 +422,8 @@ class DashboardModel(Frozen):
     track_record: TrackRecord
     class_gates: tuple[ClassGate, ...]
     verification: Verification
+    reliability: Reliability
+    probes: Probes
     judgment: Judgment
     gate: tuple[BumpRow, ...]
     bumps: tuple[BumpRow, ...]

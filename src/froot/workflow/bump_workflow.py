@@ -23,15 +23,19 @@ with workflow.unsafe.imports_passed_through():
         ClosePullRequest,
         Effect,
         JudgeChangelog,
+        MergePullRequest,
         OpenPullRequest,
         RecordOutcome,
+        ReviewBump,
     )
     from froot.domain.events import (
         ChangelogJudged,
         CiResolved,
+        GateReviewed,
         LoopEvent,
         OutcomeRecorded,
         PullRequestClosed,
+        PullRequestMerged,
         PullRequestReady,
     )
     from froot.domain.outcome import LoopOutcome
@@ -46,10 +50,13 @@ with workflow.unsafe.imports_passed_through():
         TOOL_RETRY,
     )
     from froot.workflow.types import (
+        AutoMergeInput,
         BumpParams,
         CiCheckInput,
         CloseInput,
+        GateReviewInput,
         JudgeInput,
+        MergeInput,
         OpenPrInput,
         RecordInput,
     )
@@ -70,6 +77,16 @@ class BumpWorkflow:
     async def run(self, params: BumpParams) -> LoopOutcome:
         """Drive the pure state machine to a recorded outcome."""
         transition = start(params.candidate)
+        # The class-level half of the gate: has this (repo, loop) earned the
+        # auto-merge grant on an allowlisted repo? Decided once, up front (the
+        # grant is about the class's history, not this PR), and cheap by default
+        # — the activity short-circuits to False for any non-allowlisted repo.
+        auto_merge_eligible = await workflow.execute_activity(
+            activities.auto_merge_eligible,
+            AutoMergeInput(target=params.target, loop=params.loop),
+            start_to_close_timeout=ACTIVITY_TIMEOUT,
+            retry_policy=TOOL_RETRY,
+        )
         while transition.effects:
             state = transition.next
             if len(transition.effects) != 1:
@@ -81,7 +98,12 @@ class BumpWorkflow:
             event = await self._execute(
                 params.target, params.loop, transition.effects[0]
             )
-            transition = advance(state, event, close_on_red=params.close_on_red)
+            transition = advance(
+                state,
+                event,
+                close_on_red=params.close_on_red,
+                auto_merge_eligible=auto_merge_eligible,
+            )
             if transition.kind is TransitionKind.REJECTED:
                 raise ApplicationError(
                     f"rejected transition: {transition.reason}",
@@ -142,6 +164,24 @@ class BumpWorkflow:
                     retry_policy=TOOL_RETRY,
                 )
                 return PullRequestClosed()
+            case ReviewBump():
+                verdict = await workflow.execute_activity(
+                    activities.gate_review,
+                    GateReviewInput(
+                        candidate=effect.candidate, pr=effect.pr, loop=loop
+                    ),
+                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+                return GateReviewed(verdict=verdict)
+            case MergePullRequest():
+                await workflow.execute_activity(
+                    activities.merge_pull_request,
+                    MergeInput(target=target, pr=effect.pr, loop=loop),
+                    start_to_close_timeout=CI_CHECK_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+                return PullRequestMerged()
             case RecordOutcome():
                 await workflow.execute_activity(
                     activities.record_outcome,

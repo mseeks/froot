@@ -174,6 +174,22 @@ class Forge(Protocol):
         """
         ...
 
+    async def merge_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        *,
+        head_sha: str | None = None,
+        merge_method: str = "squash",
+    ) -> None:
+        """Merge the PR (the acting gate's one write).
+
+        Passes the expected ``head_sha`` so the merge is refused if the head
+        moved since the gate decided. An unmergeable state surfaces as an error
+        rather than a silent success.
+        """
+        ...
+
 
 class ChangelogSource(Protocol):
     """Best-effort fetch of a target version's changelog / release notes."""
@@ -190,4 +206,16 @@ class ModelJudge(Protocol):
         self, changelog: Changelog, loop: Loop = ...
     ) -> ChangelogVerdict:
         """Assess a changelog into a verdict, framed by the loop."""
+        ...
+
+    async def gate_review(
+        self, changelog: Changelog, loop: Loop = ...
+    ) -> ChangelogVerdict:
+        """Independently deep-review a bump at the gate (adversarial pass).
+
+        A second, stricter reading run only when a bump is about to auto-merge:
+        ``clean`` approves the merge, anything else holds it. Independent of the
+        first :meth:`judge` pass (its own model and prompt) so the two can
+        disagree — the fourth trust leg (§3.7).
+        """
         ...

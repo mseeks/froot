@@ -28,6 +28,7 @@ def _pr(
     verdict: str | None = None,
     opened: datetime | None = None,
     merged: datetime | None = None,
+    env: str | None = None,
 ) -> GithubPr:
     return GithubPr(
         repo=REPO,
@@ -40,6 +41,7 @@ def _pr(
         state=state,
         opened_at=opened,
         merged_at=merged,
+        env=env,
     )
 
 
@@ -408,6 +410,8 @@ def _assemble_p(
     prs: list[GithubPr],
     bumps: list[BumpExecution],
     policy: AutonomyPolicy,
+    outcomes: dict[tuple[str, int], str] | None = None,
+    environment: str = "",
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
@@ -419,7 +423,14 @@ def _assemble_p(
         github=(tuple(prs), None),
         temporal=(((), tuple(bumps), (), ()), None),
         telemetry=_telemetry_off(),
+        outcomes=outcomes,
+        environment=environment,
     )
+
+
+def _held(numbers: tuple[int, ...]) -> dict[tuple[str, int], str]:
+    """Post-merge outcomes marking each PR number held (the defect bearing)."""
+    return {(REPO, n): "held" for n in numbers}
 
 
 def _clean_green_merge(
@@ -445,18 +456,37 @@ def test_class_gate_earned_for_clean_green_history():
     pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3, 4)]
     prs = [p for p, _ in pairs]
     bumps = [b for _, b in pairs]
-    model = _assemble_p(prs, bumps, _allow())
+    # All four held post-merge -> the defect bearing has evidence and is clean.
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3, 4)))
     assert len(model.class_gates) == 1
     g = model.class_gates[0]
     assert (g.repo, g.loop) == (REPO, "dependency-patch")
     assert g.decided == 4
     assert g.merged == 4
     assert g.merge_rate == 1.0
+    assert g.determined == 4
+    assert g.defects == 0
+    assert g.defect_rate == 0.0
     assert g.earned is True
     assert g.blocker is None
     # 4 merges over a 90d window (~12.86 weeks); all clean+green -> reclaimable.
     assert g.approvals_per_week > 0
     assert g.reclaim_per_week == g.approvals_per_week
+
+
+def test_class_gate_not_earned_with_a_post_merge_defect():
+    # Perfect rate and enough confirmed, but one merge broke -> the second
+    # bearing fails (zero-tolerance default), so the gate stays shut.
+    pairs = [_clean_green_merge(n, f"pkg{n}") for n in (1, 2, 3, 4)]
+    outcomes = {(REPO, 1): "held", (REPO, 2): "held", (REPO, 3): "held"}
+    outcomes[(REPO, 4)] = "broke"
+    model = _assemble_p(
+        [p for p, _ in pairs], [b for _, b in pairs], _allow(), outcomes
+    )
+    g = model.class_gates[0]
+    assert g.defects == 1
+    assert g.earned is False
+    assert g.blocker is not None and "defect rate" in g.blocker
 
 
 def test_class_gate_not_earned_below_min_decided():
@@ -510,6 +540,172 @@ def test_class_gate_reclaim_excludes_unverified_merges():
     assert g.reclaim_per_week == 0.0
 
 
+def test_class_gate_counts_only_current_environment():
+    # Two merges under the prior env (e4b) and three under the current (26b).
+    # Only the current-env merges count; the prior ones are reset but surfaced.
+    prior = [
+        _pr(
+            n,
+            f"old{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 10, tzinfo=UTC),
+            merged=datetime(2026, 5, 10, 0, 5, tzinfo=UTC),
+            env="gemma4-e4b",
+        )
+        for n in (1, 2)
+    ]
+    current = [
+        _pr(
+            n,
+            f"new{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 20, tzinfo=UTC),
+            merged=datetime(2026, 5, 20, 0, 5, tzinfo=UTC),
+            env="gemma4-26b",
+        )
+        for n in (3, 4, 5)
+    ]
+    held = {(REPO, n): "held" for n in (3, 4, 5)}
+    model = _assemble_p(
+        prior + current,
+        [],
+        _allow(),
+        outcomes=held,
+        environment="gemma4-26b",
+    )
+    g = model.class_gates[0]
+    assert g.decided == 3  # only the current-environment merges
+    assert g.prior_env_decided == 2  # the e4b record, reset but legible
+    assert g.earned is True  # 3 current, all held, 0 defects
+
+
+def test_class_gate_resets_when_only_prior_environment_history_exists():
+    # Everything was earned under e4b; the current env is 26b -> reset to zero.
+    prior = [
+        _pr(
+            n,
+            f"old{n}",
+            "merged",
+            verdict="clean",
+            opened=datetime(2026, 5, 10, tzinfo=UTC),
+            merged=datetime(2026, 5, 10, 0, 5, tzinfo=UTC),
+            env="gemma4-e4b",
+        )
+        for n in (1, 2, 3, 4)
+    ]
+    held = {(REPO, n): "held" for n in (1, 2, 3, 4)}
+    model = _assemble_p(
+        prior, [], _allow(), outcomes=held, environment="gemma4-26b"
+    )
+    g = model.class_gates[0]
+    assert g.decided == 0
+    assert g.prior_env_decided == 4
+    assert g.earned is False
+
+
+# ── Adversarial canary probes (segregation) ──────────────────────────────────
+def test_canary_rows_excluded_from_bearings_and_tallied_in_probes():
+    # A real merged bump plus two canaries (to 99.99.99): one closed (caught),
+    # one merged (escaped). The canaries must NOT touch the genuine bearings.
+    prs = [
+        _pr(1, "real", "merged", to_version="1.0.1", opened=NOW, merged=NOW),
+        _pr(2, "canary-closed", "closed", to_version="99.99.99", opened=NOW),
+        _pr(
+            3,
+            "canary-merged",
+            "merged",
+            to_version="99.99.99",
+            opened=NOW,
+            merged=NOW,
+        ),
+    ]
+    model = _assemble(prs, [], [])
+    # genuine bearings see only the one real bump
+    assert model.track_record.opened == 1
+    assert model.track_record.merged == 1
+    assert [r.package for r in model.bumps] == ["real"]
+    # the canaries are tallied apart
+    assert model.probes.total == 2
+    assert model.probes.caught == 1  # the closed one
+    assert model.probes.escaped == 1  # the merged one — a guardrail hole
+    assert model.probes.pending == 0
+
+
+def test_no_canaries_means_empty_probes():
+    prs = [_pr(1, "real", "merged", to_version="1.0.1", opened=NOW, merged=NOW)]
+    p = _assemble(prs, [], []).probes
+    assert (p.total, p.caught, p.escaped, p.pending) == (0, 0, 0, 0)
+
+
+# ── Reliability (post-merge outcome leg) ─────────────────────────────────────
+def _assemble_outcomes(
+    prs: list[GithubPr], outcomes: dict[tuple[str, int], str]
+) -> DashboardModel:
+    return read_model.assemble(
+        now=NOW,
+        repos=(REPO,),
+        scan_interval_seconds=86_400,
+        review_interval_seconds=300,
+        github=(tuple(prs), None),
+        temporal=(((), (), (), ()), None),
+        telemetry=_telemetry_off(),
+        outcomes=outcomes,
+        reliability_window_days=90,
+    )
+
+
+def test_reliability_counts_and_defect_rate():
+    prs = [
+        _pr(1, "a", "merged", opened=NOW, merged=NOW),
+        _pr(2, "b", "merged", opened=NOW, merged=NOW),
+        _pr(3, "c", "merged", opened=NOW, merged=NOW),
+        _pr(4, "d", "merged", opened=NOW, merged=NOW),
+    ]
+    outcomes = {
+        (REPO, 1): "held",
+        (REPO, 2): "held",
+        (REPO, 3): "broke",
+        (REPO, 4): "reverted",
+    }
+    r = _assemble_outcomes(prs, outcomes).reliability
+    assert (r.held, r.broke, r.reverted) == (2, 1, 1)
+    assert r.determined == 4
+    assert r.unverified == 0
+    assert r.defect_rate == 0.5  # (1 broke + 1 reverted) / 4
+
+
+def test_reliability_unknown_is_unverified_not_held():
+    prs = [_pr(1, "a", "merged", opened=NOW, merged=NOW)]
+    r = _assemble_outcomes(prs, {(REPO, 1): "unknown"}).reliability
+    assert r.unverified == 1
+    assert r.held == 0
+    assert r.determined == 0
+    assert r.defect_rate is None  # nothing determined -> no rate, not 0%
+
+
+def test_post_merge_none_when_outcome_absent():
+    # A merged PR with no outcome entry (older than the window) carries no
+    # post_merge tag and is not counted in reliability.
+    prs = [_pr(9, "old", "merged", opened=NOW, merged=NOW)]
+    model = _assemble_outcomes(prs, {})
+    assert model.bumps[0].post_merge is None
+    rel = model.reliability
+    assert (rel.held, rel.broke, rel.reverted, rel.unverified) == (0, 0, 0, 0)
+
+
+def test_post_merge_tag_attaches_to_the_right_row():
+    prs = [
+        _pr(1, "a", "merged", opened=NOW, merged=NOW),
+        _pr(2, "b", "merged", opened=NOW, merged=NOW),
+    ]
+    model = _assemble_outcomes(prs, {(REPO, 1): "broke"})
+    by_num = {r.pr_number: r.post_merge for r in model.bumps}
+    assert by_num[1] == "broke"
+    assert by_num[2] is None
+
+
 def test_class_gate_reclaim_is_zero_until_earned():
     # Two clean+green merges, but min_decided=5 -> the class is NOT earned, so
     # reclaim is zero: an un-earned class's gate would not move, hence reclaims
@@ -540,7 +736,7 @@ def test_gate_marks_open_pr_would_auto_merge_on_earned_class():
             ci="passed",
         )
     )
-    model = _assemble_p(prs, bumps, _allow())
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3)))
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is True
     assert open_row.held_reason is None
@@ -561,7 +757,12 @@ def test_gate_holds_open_pr_with_reason_when_not_allowlisted():
         )
     )
     # Earned history, but the repo is NOT allowlisted -> held on the switch.
-    model = _assemble_p(prs, bumps, _allow(allowlisted_repos=frozenset()))
+    model = _assemble_p(
+        prs,
+        bumps,
+        _allow(allowlisted_repos=frozenset()),
+        outcomes=_held((1, 2, 3)),
+    )
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is False
     assert open_row.held_reason == "auto-merge not enabled for this repo"
@@ -573,7 +774,7 @@ def test_gate_holds_open_pr_on_pending_ci():
     bumps = [b for _, b in history]
     # Open, clean, but no CI reading yet -> held on CI even though earned.
     prs.append(_pr(9, "axios", "open", verdict="clean", opened=NOW))
-    model = _assemble_p(prs, bumps, _allow())
+    model = _assemble_p(prs, bumps, _allow(), outcomes=_held((1, 2, 3)))
     open_row = next(r for r in model.gate if r.pr_number == 9)
     assert open_row.would_auto_merge is False
     assert open_row.held_reason == "CI pending"

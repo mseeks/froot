@@ -35,11 +35,15 @@ from froot.policy.naming import (
 from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
 from froot.workflow.types import (
     AdjudicateInput,
+    AutoMergeInput,
     CiCheckInput,
     CloseInput,
     DispatchInput,
     DispatchReviewInput,
+    GateReviewInput,
+    GateSelfTestInput,
     JudgeInput,
+    MergeInput,
     OpenPrInput,
     PostReviewInput,
     PrReviewParams,
@@ -55,6 +59,7 @@ _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
+_gate_log = logging.getLogger("froot.gate")
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -193,6 +198,56 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
 
 
 @activity.defn
+async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
+    """Independently deep-review a bump at the gate; fail-closed to a hold.
+
+    The fourth trust leg (§3.7): a second, adversarial model pass over the
+    changelog, run only when a bump is about to auto-merge. ``clean`` approves
+    the merge; ``risky``/``unknown`` hold the PR for the human. Fail-CLOSED — a
+    missing changelog or a model error returns a non-clean verdict, so an
+    unreviewable bump never merges unattended. This is the opposite disposition
+    from :func:`judge_changelog` (which degrades-to-proceed): here the safe
+    direction is to hold, and a non-clean verdict already means hold.
+    """
+    from froot.adapters.changelog_http import HttpChangelogSource
+    from froot.adapters.model_judge import PydanticAiJudge
+
+    changelog = await HttpChangelogSource().fetch(params.candidate)
+    if changelog is None:
+        verdict: ChangelogVerdict = UnknownVerdict(
+            rationale="No changelog to review; holding (fail-closed)."
+        )
+    else:
+        try:
+            verdict = await PydanticAiJudge().gate_review(
+                changelog, params.loop
+            )
+        except Exception as exc:
+            activity.logger.warning(
+                "gate reviewer unavailable for %s; holding: %r",
+                params.candidate.package,
+                exc,
+            )
+            verdict = UnknownVerdict(
+                rationale=f"Gate reviewer unavailable ({type(exc).__name__})."
+            )
+    _gate_log.info(
+        json.dumps(
+            {
+                "event": "gate_review",
+                "loop": params.loop.value,
+                "pr": params.pr.number,
+                "pr_url": params.pr.url,
+                "package": params.candidate.package,
+                "verdict": verdict.kind,
+                "approved": verdict.kind == "clean",
+            }
+        )
+    )
+    return verdict
+
+
+@activity.defn
 async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
     """Regenerate manifest+lockfile and open (idempotently) the bump's PR."""
     from froot.adapters.github import GitHubForge
@@ -227,13 +282,22 @@ async def check_ci(params: CiCheckInput) -> CIStatus:
 
 @activity.defn
 async def record_outcome(params: RecordInput) -> None:
-    """Label the PR and log the run telemetry — the signal-update."""
+    """Label the PR and log the run telemetry — the signal-update.
+
+    The labels carry the loop *and* the judgment environment (the judge model)
+    the PR was opened under, so the gate can count only the track record earned
+    under the current environment and reset it when the model changes (§3.7).
+    """
     from froot.adapters.github import GitHubForge
+    from froot.config.settings import ModelSettings
+    from froot.policy.environment import env_label
 
     outcome = params.outcome
-    await GitHubForge().add_labels(
-        params.target, outcome.pr.number, pr_labels(params.loop)
+    labels = (
+        *pr_labels(params.loop),
+        env_label(ModelSettings().ollama_model),
     )
+    await GitHubForge().add_labels(params.target, outcome.pr.number, labels)
     _log.info(
         json.dumps(
             {
@@ -287,6 +351,73 @@ async def dispatch_bump(params: DispatchInput) -> None:
         # This bump already has a loop (running or completed) — a no-op, so
         # re-scanning never opens a second PR for the same bump.
         return
+
+
+@activity.defn
+async def auto_merge_eligible(params: AutoMergeInput) -> bool:
+    """Whether this (repo, loop) class has earned the auto-merge grant.
+
+    Short-circuits to ``False`` for any repo a steward has not allowlisted (the
+    default), so the common case costs nothing. Otherwise it re-derives the
+    class's standing from the live GitHub history — the same triangulated,
+    windowed, environment-scoped computation the dashboard's shadow gate shows
+    (``read_model.earned_now``) — so the acting gate and the advisory panel can
+    never disagree. Best-effort: any read failure degrades to ``False`` (hold),
+    never an auto-merge.
+    """
+    from datetime import UTC, datetime
+
+    from froot.config.settings import AutonomySettings, ModelSettings
+    from froot.dashboard import github_source, read_model
+    from froot.policy.environment import environment_slug
+
+    policy = AutonomySettings().policy()
+    repo = params.target.repo.slug
+    if repo not in policy.allowlisted_repos:
+        return False
+    now = datetime.now(UTC)
+    prs, prs_error = await github_source.fetch((repo,))
+    if prs_error is not None:
+        return False  # can't confirm the record -> hold, never merge blind
+    outcomes, _ = await github_source.fetch_outcomes(
+        (repo,), prs, now=now, window_days=policy.window_days
+    )
+    return read_model.earned_now(
+        now,
+        prs,
+        outcomes,
+        repo,
+        params.loop,
+        policy,
+        environment_slug(ModelSettings().ollama_model),
+    )
+
+
+@activity.defn
+async def merge_pull_request(params: MergeInput) -> None:
+    """Auto-merge an earned, clean+green bump's PR (the acting gate's write).
+
+    Reached only after the pure machine confirmed clean+green and the class
+    earned the grant on an allowlisted repo. Passes the head SHA so GitHub
+    refuses the merge if the head moved since the gate decided.
+    """
+    from froot.adapters.github import GitHubForge
+
+    await GitHubForge().merge_pull_request(
+        params.target, params.pr.number, head_sha=params.pr.head_sha
+    )
+    _log.info(
+        json.dumps(
+            {
+                "event": "pr_merged",
+                "loop": params.loop.value,
+                "reason": "auto_merge",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "pr_url": params.pr.url,
+            }
+        )
+    )
 
 
 @activity.defn
@@ -375,6 +506,38 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
             )
         )
     return len(closures)
+
+
+@activity.defn
+async def gate_selftest(params: GateSelfTestInput) -> tuple[str, ...]:
+    """Run the adversarial gate probe against the live policy; alarm on escape.
+
+    The §2.11 deliberate disturbance for the acting gate: a battery of synthetic
+    known-bad class histories a healthy gate must refuse, scored against the
+    policy froot is *actually running* (config and all). Any escape — a bad
+    class the live gate would grant — is logged at ERROR (the alarm) so it
+    surfaces in telemetry the moment config drifts; a clean pass logs a
+    heartbeat at INFO. Returns the escaped scenario names. Pure compute,
+    repo-independent (the ``target``/``loop`` are only the log's context).
+    """
+    from froot.config.settings import AutonomySettings
+    from froot.policy.gate_probe import gate_escapes
+
+    escaped = gate_escapes(AutonomySettings().policy())
+    record = json.dumps(
+        {
+            "event": "gate_selftest",
+            "loop": params.loop.value,
+            "repo": params.target.repo.slug,
+            "healthy": not escaped,
+            "escaped": list(escaped),
+        }
+    )
+    if escaped:
+        _gate_log.error(record)  # an alarm: the gate would trust a bad class
+    else:
+        _gate_log.info(record)
+    return escaped
 
 
 # ── The determinism reviewer (the transitive ring) ──────────────────────────

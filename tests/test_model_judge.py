@@ -45,3 +45,14 @@ async def test_judge_wires_through_a_model_offline():
     )
     verdict = await judge.judge(changelog)
     assert verdict.kind in {"clean", "risky", "unknown"}
+
+
+async def test_gate_review_wires_through_its_own_model_offline():
+    # The gate reviewer is a second agent; an injected model drives it offline,
+    # and a separate gate_model overrides only that agent.
+    judge = PydanticAiJudge(model=TestModel(), gate_model=TestModel())
+    changelog = Changelog(
+        package="left-pad", version=ver("1.4.3"), text="Fixed a typo."
+    )
+    verdict = await judge.gate_review(changelog)
+    assert verdict.kind in {"clean", "risky", "unknown"}

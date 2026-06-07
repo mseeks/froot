@@ -19,6 +19,8 @@ from froot.dashboard.model import (
     DashboardModel,
     Failure,
     Judgment,
+    Probes,
+    Reliability,
     ReviewLoop,
     ReviewRecord,
     ReviewRow,
@@ -31,6 +33,7 @@ from froot.dashboard.model import (
 from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
+from froot.policy.canary import is_canary, score_probe
 from froot.policy.naming import review_workflow_id, scan_workflow_id
 from froot.result import Ok
 
@@ -127,8 +130,14 @@ def _bump_rows(
     now: datetime,
     prs: tuple[GithubPr, ...],
     bumps: tuple[BumpExecution, ...],
+    outcomes: dict[tuple[str, int], str],
 ) -> tuple[BumpRow, ...]:
-    """Join GitHub PRs (authoritative) to Temporal outcomes by PR number."""
+    """Join GitHub PRs (authoritative) to Temporal outcomes by PR number.
+
+    ``outcomes`` carries the post-merge signal (``held`` / ``broke`` /
+    ``reverted`` / ``unknown``) per recently-merged ``(repo, number)``; it is
+    absent for older or non-merged PRs, which leaves ``post_merge`` ``None``.
+    """
     # Keyed on (repo, PR number), not the bare number: Temporal lists every
     # repo's bumps in the namespace, so two repos that each have a PR #N would
     # otherwise cross-attribute one's verdict/CI onto the other's row.
@@ -160,6 +169,8 @@ def _bump_rows(
                 merged_at=pr.merged_at,
                 ttm_minutes=ttm,
                 age_hours=age,
+                post_merge=outcomes.get((pr.repo, pr.number)),
+                env=pr.env,
             )
         )
     rows.sort(key=_opened_sort_key, reverse=True)
@@ -224,6 +235,45 @@ def _verification(rows: tuple[BumpRow, ...]) -> Verification:
     )
 
 
+def _reliability(rows: tuple[BumpRow, ...], window_days: int) -> Reliability:
+    """The post-merge outcome breakdown — did the merges hold? (coarse).
+
+    Reads only the ``post_merge`` tag the outcome reader set: ``unknown`` means
+    an in-window merge we could not classify (no branch oracle / aged out), kept
+    distinct from a held one; ``None`` (older / non-merged) is not counted here.
+    The defect rate is a floor — manual and bundled reverts are invisible.
+    """
+    held = sum(1 for r in rows if r.post_merge == "held")
+    broke = sum(1 for r in rows if r.post_merge == "broke")
+    reverted = sum(1 for r in rows if r.post_merge == "reverted")
+    unverified = sum(1 for r in rows if r.post_merge == "unknown")
+    determined = held + broke + reverted
+    return Reliability(
+        held=held,
+        broke=broke,
+        reverted=reverted,
+        unverified=unverified,
+        determined=determined,
+        defect_rate=((broke + reverted) / determined) if determined else None,
+        window_days=window_days,
+    )
+
+
+def _probes(canary_rows: tuple[BumpRow, ...]) -> Probes:
+    """Tally the adversarial canary probes — caught / escaped / pending.
+
+    These rows are the synthetic bad bumps; they are scored on the strict bar
+    (a canary must never merge) and kept out of every genuine bearing.
+    """
+    scored = [score_probe(r.state) for r in canary_rows]
+    return Probes(
+        caught=sum(1 for s in scored if s == "caught"),
+        escaped=sum(1 for s in scored if s == "escaped"),
+        pending=sum(1 for s in scored if s == "pending"),
+        total=len(scored),
+    )
+
+
 def _judgment(rows: tuple[BumpRow, ...]) -> Judgment:
     """The verdict mix plus the two calibration cells worth flagging."""
     clean = sum(1 for r in rows if r.verdict == "clean")
@@ -272,20 +322,23 @@ def _class_gates(
     repos: tuple[str, ...],
     loops: tuple[Loop, ...],
     policy: AutonomyPolicy,
+    environment: str,
 ) -> tuple[ClassGate, ...]:
-    """The earned-autonomy standing of each (repo, loop) class (advisory).
+    """The earned-autonomy standing of each (repo, loop) class.
 
     Counts only PRs *decided within the window* — trust is recent, not lifetime
-    (§2.11) — so a class that stops shipping decays back below its gate. The
-    budget figures (approvals / reclaim per week) translate the record into the
-    steward-time MHE actually meters (§3.6): what the class costs now, and what
+    (§2.11) — *and* earned under the current ``environment`` (§3.7's conditional
+    property): a PR opened under a different judge model no longer counts, so a
+    model swap resets the class. ``prior_env_decided`` keeps that reset legible.
+    The budget figures (approvals / reclaim per week) translate the record into
+    the steward-time MHE meters (§3.6): what the class costs now, and what
     moving its gate would hand back.
     """
     weeks = max(policy.window_days / 7.0, 1.0)
     gates: list[ClassGate] = []
     for loop in loops:
         for repo in repos:
-            decided_rows = [
+            in_window = [
                 r
                 for r in rows
                 if r.repo == repo
@@ -293,10 +346,32 @@ def _class_gates(
                 and r.state in ("merged", "closed")
                 and _within(_decided_at(r), now, policy.window_days)
             ]
+            # An empty ``environment`` means "don't filter" (none configured);
+            # otherwise only PRs stamped with the current one count.
+            decided_rows = [
+                r for r in in_window if not environment or r.env == environment
+            ]
+            prior_env_decided = len(in_window) - len(decided_rows)
             merged_rows = [r for r in decided_rows if r.state == "merged"]
             decided = len(decided_rows)
             merged = len(merged_rows)
-            earned, blocker = class_earned(decided, merged, policy)
+            # The post-merge defect bearing, per class (§3.8): confirmed-held
+            # outcomes and how many of those went bad. Independent of the rate.
+            determined = sum(
+                1
+                for r in merged_rows
+                if r.post_merge in ("held", "broke", "reverted")
+            )
+            defects = sum(
+                1 for r in merged_rows if r.post_merge in ("broke", "reverted")
+            )
+            earned, blocker = class_earned(
+                decided=decided,
+                merged=merged,
+                determined=determined,
+                defects=defects,
+                policy=policy,
+            )
             # Reclaim is the budget a gate *move* hands back — so it is zero
             # until the class has actually earned the move. Counting the
             # clean-and-green merges of an un-earned class would imply savings
@@ -317,6 +392,12 @@ def _class_gates(
                     decided=decided,
                     merged=merged,
                     merge_rate=(merged / decided) if decided else None,
+                    determined=determined,
+                    defects=defects,
+                    defect_rate=(
+                        (defects / determined) if determined else None
+                    ),
+                    prior_env_decided=prior_env_decided,
                     earned=earned,
                     blocker=blocker,
                     approvals_per_week=round(merged / weeks, 2),
@@ -327,6 +408,26 @@ def _class_gates(
     return tuple(gates)
 
 
+def earned_now(
+    now: datetime,
+    prs: tuple[GithubPr, ...],
+    outcomes: dict[tuple[str, int], str],
+    repo: str,
+    loop: Loop,
+    policy: AutonomyPolicy,
+    environment: str,
+) -> bool:
+    """Whether one (repo, loop) class has earned its gate, from live data.
+
+    The exact computation the dashboard's class-gate panel shows, exposed so the
+    acting gate (the loop) reuses it rather than duplicating the windowing,
+    environment filter, and triangulation. Pure over already-fetched data.
+    """
+    rows = _bump_rows(now, prs, (), outcomes)
+    gates = _class_gates(now, rows, (repo,), (loop,), policy, environment)
+    return any(g.earned for g in gates)
+
+
 def _gate(
     rows: tuple[BumpRow, ...],
     gates: tuple[ClassGate, ...],
@@ -334,9 +435,10 @@ def _gate(
 ) -> tuple[BumpRow, ...]:
     """Open PRs awaiting a human, most-aged first, each carrying a verdict.
 
-    The verdict is the shadow gate's: *would* this PR auto-merge under its
-    class's grant (advisory; nothing acts). The reason is the grant met, or the
-    first blocker to fix.
+    The verdict is the gate's: would this PR auto-merge under its class's grant
+    — the loop's real decision where the repo is allowlisted, advisory (the
+    shadow gate) where it is not. The reason is the grant met, or the first
+    blocker to fix.
     """
     earned_by_class = {(g.repo, g.loop): (g.earned, g.blocker) for g in gates}
     open_rows = [r for r in rows if r.state == "open"]
@@ -549,14 +651,26 @@ def assemble(
         str | None,
     ],
     telemetry: tuple[RunTelemetry, str | None],
+    outcomes: dict[tuple[str, int], str] | None = None,
+    reliability_window_days: int = 90,
+    environment: str = "",
 ) -> DashboardModel:
-    """Build the whole view from the readers' ``(data, error)`` outputs."""
+    """Build the whole view from the readers' ``(data, error)`` outputs.
+
+    ``outcomes`` is the post-merge signal per ``(repo, number)`` from the
+    outcome reader (best-effort); absent for a merge older than the window.
+    """
     prs, github_error = github
     (scans, bumps, reviews, pr_reviews), temporal_error = temporal
     run_telemetry, clickhouse_error = telemetry
 
-    rows = _bump_rows(now, prs, bumps)
-    class_gates = _class_gates(now, rows, repos, loops, policy)
+    all_rows = _bump_rows(now, prs, bumps, outcomes or {})
+    # Canary probes are synthetic bad bumps — keep them out of every genuine
+    # bearing (track record, defect rate, gates) so a planted failure can never
+    # pollute the real reputation; they get their own tally.
+    canary_rows = tuple(r for r in all_rows if is_canary(r.to_version))
+    rows = tuple(r for r in all_rows if not is_canary(r.to_version))
+    class_gates = _class_gates(now, rows, repos, loops, policy, environment)
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
     return DashboardModel(
@@ -575,6 +689,8 @@ def assemble(
         track_record=_track_record(rows),
         class_gates=class_gates,
         verification=_verification(rows),
+        reliability=_reliability(rows, reliability_window_days),
+        probes=_probes(canary_rows),
         judgment=_judgment(rows),
         gate=_gate(rows, class_gates, policy),
         bumps=rows,

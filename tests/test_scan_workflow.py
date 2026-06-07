@@ -19,6 +19,7 @@ from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.scan_workflow import ScanWorkflow
 from froot.workflow.types import (
     DispatchInput,
+    GateSelfTestInput,
     ReconcileInput,
     ScanCandidatesInput,
     ScanParams,
@@ -50,10 +51,16 @@ async def _mock_reconcile(params: ReconcileInput) -> int:
     return 1
 
 
+@activity.defn(name="gate_selftest")
+async def _mock_gate_selftest(params: GateSelfTestInput) -> tuple[str, ...]:
+    return ()
+
+
 _MOCKS: list[Callable[..., Any]] = [
     _mock_scan,
     _mock_dispatch,
     _mock_reconcile,
+    _mock_gate_selftest,
 ]
 
 

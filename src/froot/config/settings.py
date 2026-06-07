@@ -142,8 +142,13 @@ class ModelSettings(BaseSettings):
         env_prefix="FROOT_", env_file=".env", extra="ignore", frozen=True
     )
 
-    ollama_model: str = Field(default="gemma4:e4b", min_length=1)
+    ollama_model: str = Field(default="gemma4:12b", min_length=1)
     ollama_url: str = Field(default="http://localhost:11434/v1", min_length=1)
+    # The independent gate reviewer (the fourth trust leg, §3.7). Empty means
+    # "reuse ``ollama_model``" — so by default it is the same model run a second
+    # time with an adversarial prompt; point it at a stronger model to make the
+    # deep review genuinely independent in capability, not just in framing.
+    gate_review_model: str = ""
 
 
 class TelemetrySettings(BaseSettings):
@@ -285,13 +290,14 @@ class BehaviorSettings(BaseSettings):
 
 
 class AutonomySettings(BaseSettings):
-    """The earned-autonomy thresholds (``FROOT_AUTOMERGE_*``), advisory today.
+    """The earned-autonomy thresholds (``FROOT_AUTOMERGE_*``) for the gate.
 
-    These tune the *shadow gate*: the dashboard reads them to decide whether a
-    (repo, loop) class has earned its gate move and whether each open PR would
-    auto-merge under that grant. Nothing acts on the verdict yet — froot stays
-    record-only — so the defaults are deliberately conservative and the
-    allowlist is empty, the revocable switch left off until a steward flips it.
+    These tune the gate the loop now acts on: whether a (repo, loop) class has
+    earned its move, and whether each clean+green PR merges under that grant. On
+    an allowlisted repo the loop auto-merges; everywhere else the same verdict
+    is the dashboard's advisory *shadow gate*. The defaults are deliberately
+    conservative and the allowlist is empty — the revocable switch left off
+    until a steward opts a repo in.
 
     * ``min_rate`` / ``min_decided`` / ``window_days`` — the track-record bar a
       class must clear, measured over a recent window (trust is recent, §2.11).
@@ -310,6 +316,11 @@ class AutonomySettings(BaseSettings):
     min_rate: float = Field(default=0.95, ge=0.0, le=1.0)
     min_decided: int = Field(default=5, ge=1)
     window_days: int = Field(default=90, gt=0)
+    # The post-merge defect bearing (the second, independent leg, §3.8):
+    # how many confirmed-held outcomes are needed before it counts, and the
+    # ceiling on the defect rate (zero-tolerance by default).
+    min_determined: int = Field(default=3, ge=1)
+    max_defect_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     allowlist: Annotated[tuple[str, ...], NoDecode] = ()
 
     @field_validator("allowlist", mode="before")
@@ -328,5 +339,7 @@ class AutonomySettings(BaseSettings):
             min_rate=self.min_rate,
             min_decided=self.min_decided,
             window_days=self.window_days,
+            min_determined=self.min_determined,
+            max_defect_rate=self.max_defect_rate,
             allowlisted_repos=frozenset(self.allowlist),
         )

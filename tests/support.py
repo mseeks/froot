@@ -148,6 +148,8 @@ class FakeForge:
         self.closed: list[int] = []
         self.deleted_branches: list[BranchName] = []
         self.comments: list[tuple[int, str]] = []
+        # Every auto-merge, in order, so the acting-gate tests can assert it.
+        self.merged: list[int] = []
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         self.checked_out = True
@@ -207,6 +209,16 @@ class FakeForge:
         if delete_branch:
             self.deleted_branches.append(branch)
 
+    async def merge_pull_request(
+        self,
+        target: TargetRepo,
+        number: int,
+        *,
+        head_sha: str | None = None,
+        merge_method: str = "squash",
+    ) -> None:
+        self.merged.append(number)
+
 
 class FakePackageManager:
     """In-memory :class:`~froot.ports.protocols.PackageManager`."""
@@ -261,12 +273,26 @@ class FakeChangelogSource:
 class FakeJudge:
     """In-memory :class:`~froot.ports.protocols.ModelJudge`."""
 
-    def __init__(self, verdict: ChangelogVerdict | None = None) -> None:
+    def __init__(
+        self,
+        verdict: ChangelogVerdict | None = None,
+        gate_verdict: ChangelogVerdict | None = None,
+    ) -> None:
         self.verdict: ChangelogVerdict = verdict or CleanVerdict(rationale="ok")
+        # The gate reviewer's verdict; defaults to the judge's, so an
+        # unconfigured fake approves a clean bump at the gate too.
+        self.gate_verdict: ChangelogVerdict = gate_verdict or self.verdict
         self.loops: list[Loop] = []
+        self.gate_loops: list[Loop] = []
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
     ) -> ChangelogVerdict:
         self.loops.append(loop)
         return self.verdict
+
+    async def gate_review(
+        self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
+    ) -> ChangelogVerdict:
+        self.gate_loops.append(loop)
+        return self.gate_verdict
