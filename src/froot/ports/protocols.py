@@ -81,8 +81,10 @@ class PackageManager(Protocol):
         vetoes each before any PR is opened.
 
         An ecosystem whose static analysis needs the project's dependencies
-        installed (uv via ``deptry``) yields nothing here until froot has a
-        sandboxed executor — the worker never installs a target's dependencies.
+        installed (uv via ``deptry``) runs that install + analysis in a sandbox
+        the adapter holds (an external e2b microVM) — the worker itself still
+        never installs a target's dependencies. With no sandbox configured (no
+        ``FROOT_E2B_API_KEY``) the signal degrades to no removals.
         """
         ...
 

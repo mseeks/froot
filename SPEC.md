@@ -226,8 +226,9 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 3. **✓ Widen the work item.** dead-code (unused dependencies) — the first loop whose action edits
    *source*, not just a manifest, and the first to carry a non-bump work item (a `Removal`) through
    the same spine. A safe-to-remove judge vetoes *at the signal*; CI stays the oracle. npm via
-   `knip` (static, no install) *done*; the uv arm (`deptry`) is deferred pending a sandbox where
-   the target's deps can be installed (the target's own CI — see [VISION.md](./VISION.md)).
+   `knip` (static, no install) *done*; the uv arm (`deptry`) *done* — it runs `uv sync` + `deptry`
+   in an external e2b microVM (the sandbox where the target's deps can be installed; see
+   [VISION.md](./VISION.md)), degrading to no-op when no e2b key is set.
 4. **✓ Earn autonomy.** The acting gate: a class auto-merges its clean+green bumps once it clears
    four independent bearings (approval rate, post-merge defect rate, an adversarial gate
    self-test, an independent deep review) on an allowlisted repo. *Done — off by default until a

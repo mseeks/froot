@@ -64,18 +64,23 @@ without rewiring the plant.*
    fabrication loop writing arbitrary code needs an isolated worktree, a tool
    allowlist, resource caps. Isolation scales with how dangerous the station is —
    this is where per-loop worker images eventually earn their keep.
-   - **The chosen first sandbox is the target's own CI.** The worker never
-     installs or runs a repo's toolchain (the invariant); but some signals need
-     it — e.g. Python dead-code (`deptry`) must run where the deps are installed.
-     Rather than add in-cluster isolation, dispatch a pinned ephemeral CI job
-     (GitHub Actions `workflow_dispatch`) behind a single Temporal activity and
-     read the result. Zero cluster footprint, full isolation, and *CI is already
-     the oracle* — the SPEC says as much. This is the home for the deferred uv
-     dead-code arm.
-   - **The cluster rules out microVMs.** DOKS gives no guaranteed `/dev/kvm`, so
-     Kata/Firecracker degrade to software emulation; gVisor is the only viable
-     in-cluster strong isolation, and only if a need survives the CI-sandbox
-     approach. Don't add it speculatively.
+   - **The first sandbox is e2b — external Firecracker microVMs.** The worker
+     never installs or runs a repo's toolchain (the invariant); but some signals
+     need it — e.g. Python dead-code (`deptry`) must run where the deps are
+     installed. froot tars the *existing* checkout into an e2b microVM (so the
+     GitHub token never enters it), runs `uv sync` + `deptry` there, and reads
+     back the JSON. The microVM has egress to the package registries but no path
+     back into the cluster. *Shipped — the uv dead-code arm runs this on every
+     `@uv` repo each tick; with no `FROOT_E2B_API_KEY` it degrades to no-op.*
+   - **e2b sidesteps the in-cluster microVM problem by being off-cluster.** DOKS
+     gives no guaranteed `/dev/kvm`, so *in-cluster* Kata/Firecracker degrade to
+     software emulation and gVisor would be the only viable in-cluster strong
+     isolation. e2b runs the Firecracker VMs on its own infrastructure, so that
+     constraint never binds. An earlier plan used the target's own CI
+     (`workflow_dispatch`) as the sandbox; e2b won because it isolates the
+     *signal* without coupling froot to each repo's CI wiring — and the *action*
+     (remove + relock) stays lockfile-only on the worker, with CI still the
+     oracle for the resulting PR.
    - **Agentic executors stay replay-safe via the durable-execution pattern.**
      When a loop's action becomes an LLM coding harness, wrap it so its
      model/tool calls are *recorded Temporal activities* (Pydantic AI's
@@ -143,10 +148,10 @@ class.
 
 1. **Mechanical repair loops** — dependency-patch ✓, security-patch ✓, and
    **dead-code** (unused dependencies): npm via `knip` ✓ — static analysis, no
-   install, so it fits the clone-only worker. The uv arm (`deptry`) is deferred:
-   it needs the target's deps installed, so it waits on the CI sandbox above. A
-   safe-to-remove judge vetoes *at the signal* (a tool used without an import
-   never becomes a PR), and CI stays the oracle.
+   install, so it fits the clone-only worker. The uv arm (`deptry`) ✓ — it runs
+   `uv sync` + `deptry` in an external e2b microVM (the deps must be installed),
+   the sandbox above. A safe-to-remove judge vetoes *at the signal* (a tool used
+   without an import never becomes a PR), and CI stays the oracle.
 2. **The enum → loop-registry refactor** — the moment froot stops being "a few
    loops" and becomes "the chassis you plug loops into."
 3. **Fabrication loops** — ordered by oracle strength (test-backfill, flaky-fix
