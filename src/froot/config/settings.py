@@ -290,13 +290,14 @@ class BehaviorSettings(BaseSettings):
 
 
 class AutonomySettings(BaseSettings):
-    """The earned-autonomy thresholds (``FROOT_AUTOMERGE_*``), advisory today.
+    """The earned-autonomy thresholds (``FROOT_AUTOMERGE_*``) for the gate.
 
-    These tune the *shadow gate*: the dashboard reads them to decide whether a
-    (repo, loop) class has earned its gate move and whether each open PR would
-    auto-merge under that grant. Nothing acts on the verdict yet — froot stays
-    record-only — so the defaults are deliberately conservative and the
-    allowlist is empty, the revocable switch left off until a steward flips it.
+    These tune the gate the loop now acts on: whether a (repo, loop) class has
+    earned its move, and whether each clean+green PR merges under that grant. On
+    an allowlisted repo the loop auto-merges; everywhere else the same verdict
+    is the dashboard's advisory *shadow gate*. The defaults are deliberately
+    conservative and the allowlist is empty — the revocable switch left off
+    until a steward opts a repo in.
 
     * ``min_rate`` / ``min_decided`` / ``window_days`` — the track-record bar a
       class must clear, measured over a recent window (trust is recent, §2.11).

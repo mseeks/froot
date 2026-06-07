@@ -76,8 +76,9 @@ class BumpRow(Frozen):
         merged_at: When the PR was merged, if it was.
         ttm_minutes: Time-to-merge in minutes (merged - opened), if merged.
         age_hours: Age in hours for a still-open PR (now - opened), or ``None``.
-        would_auto_merge: For an open PR, whether it would auto-merge under the
-            advisory earned-autonomy grant (the shadow gate; nothing acts).
+        would_auto_merge: For an open PR, whether it meets the earned-autonomy
+            grant — the loop's actual merge decision on an allowlisted repo, the
+            advisory shadow-gate verdict everywhere else (the default).
         held_reason: Why an open PR would *not* auto-merge, the first blocker.
         post_merge: For a merged PR, whether the merge *held* — ``held`` (the
             branch's CI stayed green after the merge), ``broke`` (it went red),
@@ -108,7 +109,7 @@ class BumpRow(Frozen):
 
 
 class ClassGate(Frozen):
-    """The earned-autonomy standing of one (repo, loop) class — advisory only.
+    """The earned-autonomy standing of one (repo, loop) class.
 
     The MHE economics of approval (§3.6) made legible: a class earns its gate
     move with a high enough approval rate over enough recently-decided PRs,
@@ -398,7 +399,7 @@ class DashboardModel(Frozen):
         sources: Per-source health for this request.
         scan_loops: Liveness of each repo's scan schedule.
         track_record: The reputation headline.
-        class_gates: The earned-autonomy standing per (repo, loop) — advisory.
+        class_gates: The earned-autonomy standing per (repo, loop) — the gate.
         verification: The CI-oracle breakdown.
         reliability: Did the merges hold post-merge (the outcome leg, coarse).
         probes: Adversarial canary results, kept apart from the real bearings.

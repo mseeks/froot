@@ -1,12 +1,14 @@
-"""The earned-autonomy policy — read-only today, the gate's logic tomorrow.
+"""The earned-autonomy policy — the gate's logic, now load-bearing.
 
-froot is record-only: every PR is human-approved. This is the pure logic that
-says, per the Many Hands Engineering trust economy (§3.6-3.7), whether a *class*
-of work (a loop, on a repo) has earned its gate move, and whether a given PR
-*would* auto-merge under that grant. Today the dashboard renders the verdict
-and nothing acts on it — the "shadow gate", the dry run that lets a steward
-watch the decision for weeks before granting authority. Phase 4 flips it to
-action by reusing these same functions; nothing here mutates anything.
+The pure logic that says, per the Many Hands Engineering trust economy
+(§3.6-3.7), whether a *class* of work (a loop, on a repo) has earned its gate
+move, and whether a given PR auto-merges under that grant. The acting gate
+(Phase 4) reuses these same functions: on an **allowlisted** repo, a class that
+clears them has its clean+green bumps merged by the loop itself. Everywhere else
+— the default, the allowlist empty — the very same verdict stays advisory and
+the dashboard renders it as the *shadow gate* a steward watches before opting a
+repo in. Pure throughout; nothing here mutates anything (the merge is an effect
+the spine runs only once every condition, allowlist included, is met).
 
 The grant has MHE's five properties. **Earned**: a class earns its gate by a
 track record — a high enough *approval rate* over enough *decided* PRs.
@@ -35,7 +37,7 @@ from froot.domain.base import Frozen
 
 
 class AutonomyPolicy(Frozen):
-    """The thresholds a class must clear to earn its gate move (advisory).
+    """The thresholds a class must clear to earn its gate move.
 
     Attributes:
         min_rate: The approval (merge) rate a class needs over the window —
@@ -69,7 +71,9 @@ class AutonomyVerdict(Frozen):
     """Whether a PR would auto-merge under the grant, and the reason either way.
 
     Attributes:
-        would_merge: True iff every condition is met (advisory — nothing acts).
+        would_merge: True iff every condition is met, the allowlist included —
+        so on an allowlisted repo this is the loop's actual merge decision,
+        and elsewhere (the default) the advisory shadow-gate verdict.
         reason: The deciding factor — the grant met, or the first blocker.
     """
 

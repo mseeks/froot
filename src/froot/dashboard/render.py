@@ -302,10 +302,12 @@ def _defect_cell(g: ClassGate) -> str:
 
 
 def _class_gates(model: DashboardModel) -> str:
-    """The earned-autonomy panel — the shadow gate's per-class standing.
+    """The earned-autonomy panel — the gate's per-class standing.
 
-    Read-only: it renders whether each (repo, loop) class *would* have earned a
-    gate move, and the steward-budget that move would reclaim. Nothing acts.
+    Renders whether each (repo, loop) class has earned its gate move (the two
+    record bearings: rate + defect rate) and the steward-budget that move
+    reclaims. On an allowlisted repo a met gate auto-merges; elsewhere — the
+    default — it is the advisory shadow gate a steward watches.
     """
     gates = model.class_gates
     if not gates:
@@ -343,11 +345,15 @@ def _class_gates(model: DashboardModel) -> str:
         "oracle), so they can&rsquo;t both lie at once. The window keeps trust "
         "recent. <b>Budget</b> reads the gate in steward-time: approvals/week "
         "the class costs now &rarr; the reclaimable slice a move hands back. "
-        "<b>Advisory only</b>: auto-merge is allowlist-gated and off; sampled "
-        "review and adversarial probing are the next legs.</p>"
+        "Two further legs guard the live merge beyond this panel: an "
+        "<b>adversarial gate self-test</b> (a known-bad class must never be "
+        "granted) and an <b>independent deep review</b> of each bump at merge. "
+        "Where a repo is <b>allowlisted</b> a met gate auto-merges; the "
+        "allowlist is empty by default &mdash; the revocable switch &mdash; so "
+        "elsewhere this stays advisory.</p>"
     )
     return (
-        "<section><h2>Earned autonomy &middot; the shadow gate</h2>"
+        "<section><h2>Earned autonomy &middot; the gate</h2>"
         f"{body}{_why(note)}</section>"
     )
 
@@ -480,11 +486,12 @@ def _judgment(model: DashboardModel) -> str:
 
 
 def _shadow_badge(row: BumpRow) -> str:
-    """Whether this open PR *would* auto-merge under its class's grant.
+    """Whether this open PR meets its class's auto-merge grant.
 
-    Advisory: a green 'would auto-merge' means every condition is met and the
-    human approval is the only thing still in the way; otherwise the first
-    blocker, muted, so the held reason is the thing to fix.
+    These PRs are still open, so on an allowlisted repo a met grant would
+    already have merged: a green 'would auto-merge' here means the grant is met
+    but the repo is not allowlisted (or a deeper check held it), so it is still
+    yours. Otherwise the first blocker, muted — the held reason to fix.
     """
     if row.would_auto_merge:
         return '<span class="ok">would auto-merge</span>'
@@ -507,13 +514,15 @@ def _gate(model: DashboardModel) -> str:
             for row in model.gate
         )
         note = _why(
-            '<p class="note">The <b>shadow gate</b> column is advisory &mdash; '
-            "froot acts on nothing. A green &lsquo;would auto-merge&rsquo; "
-            "means this PR met its class&rsquo;s grant and the human approval "
-            "is the only remaining step; it rests on the single CI oracle and "
-            "a merge-rate record, which (esp. for a security patch) is not the "
-            "same as a confirmed-good or security-reviewed outcome. You still "
-            "own every merge.</p>"
+            '<p class="note">These PRs are open and <b>yours</b>. A green '
+            "&lsquo;would auto-merge&rsquo; means this PR met its "
+            "class&rsquo;s grant &mdash; on an allowlisted repo the loop would "
+            "have merged it already, so its presence here means the repo is "
+            "not allowlisted (or a deeper check held it). The verdict rests on "
+            "the single CI "
+            "oracle and a merge-rate record, which (esp. for a security patch) "
+            "is not the same as a confirmed-good or security-reviewed outcome. "
+            "You own every open merge.</p>"
         )
         body = (
             "<table><thead><tr><th>package</th><th>waiting</th>"
@@ -700,16 +709,19 @@ def _reviews(model: DashboardModel) -> str:
 def _footer() -> str:
     return (
         "<footer>"
-        "<b>Authority envelope.</b> Stage 1 &mdash; froot holds "
-        "<b>write authority</b> only: it opens PRs, a human approves every "
-        "merge (commit authority = none). Trust, when any is granted, is "
-        "earned, narrow to a single loop on a single repo (a version bump is "
-        "not a security patch; they never share a record), conditional on its "
-        'environment (judge <span class="mono">gemma4:26b</span>, '
-        "lockfile-only regen), revocable, and time-expiring. Today it records "
-        "the track "
-        "record and renders a <b>shadow gate</b> &mdash; a dry run of the "
-        "auto-merge decision that still acts on nothing.<br>"
+        "<b>Authority envelope.</b> froot holds <b>write authority</b> "
+        "everywhere (it opens PRs) and conditional <b>merge authority</b> "
+        "only on an allowlisted repo where the class has earned its gate "
+        "&mdash; the allowlist is empty by default, so commit authority is "
+        "none until a steward opts a repo in. Trust, when granted, is earned, "
+        "narrow to a single loop on a single repo (a version bump is not a "
+        "security patch; they never share a record), conditional on its "
+        "environment (judge "
+        '<span class="mono">gemma4:26b</span>, lockfile-only regen), revocable '
+        "(the allowlist), and time-expiring. A met gate auto-merges only "
+        "after passing an independent deep review; everywhere not allowlisted "
+        "the same verdict is the advisory <b>shadow gate</b> a steward "
+        "watches.<br>"
         "Everything above is derived on this request from GitHub (outcomes) + "
         "Temporal (runs) + ClickHouse (telemetry). froot keeps no database; "
         "reload to recompute."

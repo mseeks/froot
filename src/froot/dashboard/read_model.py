@@ -324,7 +324,7 @@ def _class_gates(
     policy: AutonomyPolicy,
     environment: str,
 ) -> tuple[ClassGate, ...]:
-    """The earned-autonomy standing of each (repo, loop) class (advisory).
+    """The earned-autonomy standing of each (repo, loop) class.
 
     Counts only PRs *decided within the window* — trust is recent, not lifetime
     (§2.11) — *and* earned under the current ``environment`` (§3.7's conditional
@@ -435,9 +435,10 @@ def _gate(
 ) -> tuple[BumpRow, ...]:
     """Open PRs awaiting a human, most-aged first, each carrying a verdict.
 
-    The verdict is the shadow gate's: *would* this PR auto-merge under its
-    class's grant (advisory; nothing acts). The reason is the grant met, or the
-    first blocker to fix.
+    The verdict is the gate's: would this PR auto-merge under its class's grant
+    — the loop's real decision where the repo is allowlisted, advisory (the
+    shadow gate) where it is not. The reason is the grant met, or the first
+    blocker to fix.
     """
     earned_by_class = {(g.repo, g.loop): (g.earned, g.blocker) for g in gates}
     open_rows = [r for r in rows if r.state == "open"]
