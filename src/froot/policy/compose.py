@@ -84,12 +84,14 @@ def _verdict_summary(verdict: ChangelogVerdict) -> str:
 
 
 def _title_prefix(loop: Loop) -> str:
-    """The PR-title verb for a loop (``deps`` / ``security``)."""
+    """The PR-title verb for a loop (deps / security / dead-code)."""
     match loop:
         case Loop.DEPENDENCY_PATCH:
             return "deps"
         case Loop.SECURITY_PATCH:
             return "security"
+        case Loop.DEAD_CODE:
+            return "dead-code"
     assert_never(loop)
 
 

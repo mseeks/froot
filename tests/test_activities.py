@@ -14,12 +14,18 @@ import froot.adapters.registry as registry_mod
 import froot.dashboard.github_source as github_source_mod
 import froot.dashboard.read_model as read_model_mod
 import froot.workflow.temporal_client as temporal_client
-from froot.domain.candidate import AvailableUpgrade
-from froot.domain.changelog import Changelog, CleanVerdict, UnknownVerdict
+from froot.domain.candidate import AvailableUpgrade, Candidate
+from froot.domain.changelog import (
+    Changelog,
+    CleanVerdict,
+    RiskyVerdict,
+    UnknownVerdict,
+)
 from froot.domain.ci import CIPassed
 from froot.domain.ecosystem import Ecosystem
 from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
+from froot.domain.removal import Removal
 from froot.policy.naming import bump_workflow_id
 from froot.workflow import activities
 from froot.workflow.types import (
@@ -74,7 +80,10 @@ async def test_scan_candidates_selects_patches(
     result = await activities.scan_candidates(
         ScanCandidatesInput(target=make_repo())
     )
-    assert [candidate.target for candidate in result] == [ver("1.4.3")]
+    # The patch loop yields bumps; narrow to read the version it targets.
+    assert [c.target for c in result if isinstance(c, Candidate)] == [
+        ver("1.4.3")
+    ]
 
 
 async def test_scan_candidates_security_loop(
@@ -97,9 +106,77 @@ async def test_scan_candidates_security_loop(
     result = await activities.scan_candidates(
         ScanCandidatesInput(target=make_repo(), loop=Loop.SECURITY_PATCH)
     )
-    assert [candidate.target for candidate in result] == [ver("1.4.3")]
+    assert [c.target for c in result if isinstance(c, Candidate)] == [
+        ver("1.4.3")
+    ]
     assert result[0].justification is not None
     assert "GHSA-1" in result[0].justification
+
+
+async def test_scan_candidates_dead_code_keeps_judge_approved_removals(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The dead-code arm: knip flags unused deps, the safe-to-remove judge vetoes
+    # each, survivors carry the judge's rationale into their justification.
+    unused = (make_removal(package="left-pad"),)
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(unused=unused),
+    )
+    monkeypatch.setattr(
+        model_mod,
+        "PydanticAiJudge",
+        lambda: FakeJudge(removal_verdict=CleanVerdict(rationale="not used")),
+    )
+    result = await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo(), loop=Loop.DEAD_CODE)
+    )
+    assert [r.package for r in result if isinstance(r, Removal)] == ["left-pad"]
+    assert result[0].justification == "unused (knip); not used"
+
+
+async def test_scan_candidates_dead_code_vetoes_unsafe_removals(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A tool used without an import (pytest) is flagged unused but the judge
+    # holds it (risky) — the veto at the signal drops it before any PR.
+    unused = (make_removal(package="pytest", dev=True),)
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(unused=unused),
+    )
+    monkeypatch.setattr(
+        model_mod,
+        "PydanticAiJudge",
+        lambda: FakeJudge(
+            removal_verdict=RiskyVerdict(
+                rationale="test runner", concerns=("used via CLI",)
+            )
+        ),
+    )
+    result = await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo(), loop=Loop.DEAD_CODE)
+    )
+    assert result == ()
+
+
+async def test_reconcile_skips_dead_code(monkeypatch: pytest.MonkeyPatch):
+    # Reconcile is version-supersession cleanup; a removal has no version, so
+    # dead-code reconcile must return 0 *without* re-running its signal (which
+    # would cost a checkout + the veto judge every tick).
+    def boom(ecosystem: object) -> object:
+        raise AssertionError("dead-code reconcile must not re-scan")
+
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(registry_mod, "package_manager_for", boom)
+    closed = await activities.reconcile_open_prs(
+        ReconcileInput(target=make_repo(), loop=Loop.DEAD_CODE)
+    )
+    assert closed == 0
 
 
 async def test_scan_candidates_logs_considered_and_selected(

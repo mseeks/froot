@@ -23,11 +23,11 @@ import froot.adapters.changelog_http as changelog_mod
 import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
 import froot.adapters.registry as registry_mod
-from froot.domain.candidate import Candidate
 from froot.domain.changelog import Changelog, CleanVerdict
 from froot.domain.ci import CIFailed, CIPassed, CIPending
 from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
+from froot.domain.work import WorkItem
 from froot.workflow import activities
 from froot.workflow.bump_workflow import BumpWorkflow
 from froot.workflow.runtime import DATA_CONVERTER
@@ -39,6 +39,7 @@ from tests.support import (
     FakePackageManager,
     make_candidate,
     make_pr,
+    make_removal,
     make_repo,
     ver,
 )
@@ -89,7 +90,7 @@ async def _run(
     *,
     close_on_red: bool = True,
     loop: Loop = Loop.DEPENDENCY_PATCH,
-    candidate: Candidate | None = None,
+    candidate: WorkItem | None = None,
 ) -> LoopOutcome:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
@@ -147,6 +148,30 @@ async def test_green_security_bump_records_with_security_labels(
     assert outcome.ci_passed
     labeled = set(fake.labeled or ())
     assert {"froot", "security-patch"} <= labeled
+    assert any(name.startswith("froot-env:") for name in labeled)
+    assert fake.closed == []
+
+
+async def test_green_removal_records_and_stays_open(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The dead-code loop closes through the same real chain — proving a Removal
+    # (no version) serializes across Temporal's data converter and drives the
+    # spine: judge (clean from justification) -> open (remove_dependency) ->
+    # check-ci -> record, recorded and left open for the human.
+    fake = FakeForge(
+        opened_pr=make_pr(number=11, branch="froot/dead-code/left-pad-unused"),
+        ci=CIPassed(),
+    )
+    _wire_fakes(monkeypatch, fake)
+    removal = make_removal(
+        package="left-pad", justification="unused (knip); not used"
+    )
+    outcome = await _run(loop=Loop.DEAD_CODE, candidate=removal)
+    assert outcome.ci_passed
+    assert outcome.candidate == removal
+    labeled = set(fake.labeled or ())
+    assert {"froot", "dead-code"} <= labeled
     assert any(name.startswith("froot-env:") for name in labeled)
     assert fake.closed == []
 

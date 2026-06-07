@@ -105,6 +105,14 @@ def _loop_context(loop: Loop) -> str:
                 "line to clear a vulnerability; weigh breaking changes the "
                 "human should know before merging — the fix is still worth it."
             )
+        case Loop.DEAD_CODE:
+            # The dead-code loop judges removals via ``judge_removal``, not the
+            # changelog judge, so this context is never reached in practice;
+            # kept for match exhaustiveness with a sensible fallback.
+            return (
+                "This concerns an unused-dependency check; weigh whether the "
+                "package is genuinely unused before treating notes as decisive."
+            )
     assert_never(loop)
 
 

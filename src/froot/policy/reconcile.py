@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from froot.domain.base import Frozen
+from froot.domain.candidate import Candidate
 from froot.domain.loop import Loop
 from froot.domain.pull_request import PullRequestRef
 from froot.domain.version import Version
@@ -31,7 +32,7 @@ from froot.policy.naming import branch_package_prefix
 from froot.result import Ok
 
 if TYPE_CHECKING:
-    from froot.domain.candidate import Candidate
+    from froot.domain.work import WorkItem
 
 
 class ReconcileClosure(Frozen):
@@ -49,7 +50,7 @@ class ReconcileClosure(Frozen):
 
 def reconciliations(
     open_prs: tuple[PullRequestRef, ...],
-    candidates: tuple[Candidate, ...],
+    candidates: tuple[WorkItem, ...],
     loop: Loop = Loop.DEPENDENCY_PATCH,
 ) -> tuple[ReconcileClosure, ...]:
     """The loop's PRs to close this tick, derived from its current candidates.
@@ -57,8 +58,9 @@ def reconciliations(
     Args:
         open_prs: Every open PR on the repo (other loops' and humans' branches
             simply never match this loop's prefix).
-        candidates: This loop's current candidates (each carries the package and
-            the version the loop now targets).
+        candidates: This loop's current work items. Only *bumps* supersede (they
+            carry a version); removals carry none, so they are ignored here — a
+            removal loop's stale-PR cleanup is a separate concern.
         loop: Which loop is reconciling — scopes the branch matching to its own
             namespace.
 
@@ -67,10 +69,11 @@ def reconciliations(
         version below the loop's current candidate for that package, in
         PR-number order.
     """
-    by_package = {candidate.package: candidate for candidate in candidates}
+    bumps = tuple(c for c in candidates if isinstance(c, Candidate))
+    by_package = {candidate.package: candidate for candidate in bumps}
     closures: list[ReconcileClosure] = []
     for pr in sorted(open_prs, key=lambda p: p.number):
-        matched = _match_pr(pr, candidates, loop)
+        matched = _match_pr(pr, bumps, loop)
         if matched is None:
             continue
         package, pr_target = matched

@@ -1,9 +1,12 @@
 """The maintenance loops froot runs, and how each is namespaced.
 
 froot's durable chassis is loop-agnostic; only the signal, the candidate policy,
-and a little namespacing make a loop a specialist. Two loops ship:
-:data:`Loop.DEPENDENCY_PATCH` (keep dependencies patched) and
-:data:`Loop.SECURITY_PATCH` (bump dependencies to clear known advisories).
+and a little namespacing make a loop a specialist. Three loops ship:
+:data:`Loop.DEPENDENCY_PATCH` (keep dependencies patched),
+:data:`Loop.SECURITY_PATCH` (bump dependencies to clear known advisories), and
+:data:`Loop.DEAD_CODE` (remove unused dependencies). The first two propose
+*bumps*; the third proposes *removals* — the chassis carries either as a
+:data:`~froot.domain.work.WorkItem`.
 
 A loop's *value* is the kebab name that namespaces everything it owns — the
 branch prefix (``froot/<loop>``), the PR label, the workflow ids, and the
@@ -22,3 +25,4 @@ class Loop(StrEnum):
 
     DEPENDENCY_PATCH = "dependency-patch"
     SECURITY_PATCH = "security-patch"
+    DEAD_CODE = "dead-code"

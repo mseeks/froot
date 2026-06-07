@@ -61,10 +61,13 @@ def test_parses_loops_list(monkeypatch: pytest.MonkeyPatch):
     from froot.domain.loop import Loop
 
     monkeypatch.setenv("FROOT_REPOS", "acme/widgets")
-    monkeypatch.setenv("FROOT_LOOPS", "dependency-patch, security-patch")
+    monkeypatch.setenv(
+        "FROOT_LOOPS", "dependency-patch, security-patch, dead-code"
+    )
     assert Settings().loops == (
         Loop.DEPENDENCY_PATCH,
         Loop.SECURITY_PATCH,
+        Loop.DEAD_CODE,
     )
 
 
