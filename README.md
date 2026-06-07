@@ -11,8 +11,9 @@
 
 froot runs autonomous code-maintenance loops on Temporal. A loop watches a repo for one class
 of decay, proposes a bounded fix as a pull request, lets the repo's **own CI** verify it, and
-leaves the outcome behind as a signal — while a human approves the merge. The first loop keeps
-dependencies patched; froot is the chassis an army of such loops grows on.
+leaves the outcome behind as a signal. A human approves every merge until a class *earns* the
+gate — then froot auto-merges its clean, green bumps on an opted-in repo (off by default). The
+first loop keeps dependencies patched; froot is the chassis an army of such loops grows on.
 
 See **[SPEC.md](./SPEC.md)** for the what and the why.
 

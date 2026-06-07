@@ -77,9 +77,10 @@ violates one of these.
    *Why: this is how one substrate fields an army of specialists without forking — and it is
    the exact line between "build once" and "tune per target."*
 
-6. **Earn autonomy; record first, gate later.** Every PR is human-approved to start. froot
-   records the track record but does not yet act on it. Trust, when granted, is earned, narrow,
-   conditional, revocable, and expiring ([MHE §3.7][mhe]).
+6. **Earn autonomy; record first, gate later.** Every PR starts human-approved. froot records
+   the track record and now acts on it where a class has earned the grant on an allowlisted repo
+   (the acting gate); the allowlist is empty by default, so elsewhere it stays advisory. Trust,
+   when granted, is earned, narrow, conditional, revocable, and expiring ([MHE §3.7][mhe]).
    *Why: you cannot move a gate honestly without a track record, and you cannot earn one without
    first running supervised.*
 
@@ -205,21 +206,27 @@ two sources it already has:
 - **ClickStack** — the run ledger. Cost, candidates considered-but-dropped, CI-wait, escalations,
   emitted as OTEL (the observability path already in place).
 
-Day one is **record-only**: the gate stays at human-approves-every-PR. The point is to *have* a
-track record so that, later, moving a gate is what the numbers say rather than a guess
-([MHE §3.6][mhe]) — and so trust can be granted with all five of its properties intact.
+froot began **record-only** and earned its way off it: the gate now auto-merges on an allowlisted
+repo where a class has cleared its bearings (the allowlist is empty by default, so elsewhere it
+stays human-approves-every-PR). Having the track record first is what let moving the gate be what
+the numbers say rather than a guess ([MHE §3.6][mhe]) — and trust is granted with all five of its
+properties intact.
 
 ## Roadmap
 
 Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 
-1. **Now — close one loop.** dependency-patch, end-to-end, on one target repo. The template.
-2. **Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
-   Nearly free; proves the template is a template.
-3. **Coordinate.** Add notifier loops (`derived-state`, `determinism`) that durably guard an
-   already-running durable app — froot's second durable system keeping the first one healthy —
-   and let loops start reading each other's GitHub/ClickStack signals.
-4. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
+1. **✓ Close one loop.** dependency-patch, end-to-end, on one target repo. The template. *Done.*
+2. **✓ Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
+   Proves the template is a template. *Done.*
+3. **✓ Earn autonomy.** The acting gate: a class auto-merges its clean+green bumps once it clears
+   four independent bearings (approval rate, post-merge defect rate, an adversarial gate
+   self-test, an independent deep review) on an allowlisted repo. *Done — off by default until a
+   steward allowlists a repo.*
+4. **Coordinate.** Notifier loops (`determinism` ships; `derived-state` next) that durably guard
+   an already-running durable app, and loops reading each other's GitHub/ClickStack signals. *In
+   progress.*
+5. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
    are the ones that need a real agentic coding harness; that decision is made *then*, on terrain
    that already works — not now.
 
@@ -227,7 +234,6 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 
 Naming these is how we stay KISS. Each is deferred on purpose, not forgotten.
 
-- **Auto-merge / earned autonomy.** Record the track record first; act on it once it exists.
 - **A reputation store.** Derive it from GitHub + ClickStack.
 - **An agentic coding harness.** A mechanical loop doesn't need one. It arrives with the fixers.
 - **Running tests or builds on the cluster.** CI does that.
