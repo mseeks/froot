@@ -204,3 +204,24 @@ def test_transitive_hazard_is_invisible_to_kernel_but_caught_by_brain(
     hazard = result.hazards[0]
     assert hazard.impurity.rule == "datetime.datetime.now"
     assert hazard.via == ("stamp",)
+
+
+def test_banned_tables_match_the_brain() -> None:
+    """The vendored kernel and the brain's analyzer must ban the SAME symbols.
+
+    ``scripts/check_determinism.py`` (the blocking CI gate) and
+    :mod:`froot.policy.determinism` (the advisory reviewer) each define four
+    hand-copied ``BANNED_*`` tables. If they drift, froot's own gate and its
+    reviewer disagree about what "deterministic" means — the exact class of
+    decay froot exists to catch, uncaught in froot itself. Pin them equal so the
+    duplication can never silently diverge.
+    """
+    from froot.policy import determinism as brain
+
+    for name in (
+        "BANNED_CALLS",
+        "BANNED_CALL_MODULES",
+        "BANNED_ATTRS",
+        "BANNED_BUILTINS",
+    ):
+        assert getattr(_KERNEL, name) == getattr(brain, name), name
