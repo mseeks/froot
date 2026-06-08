@@ -36,6 +36,7 @@ from froot.dashboard.model import (
 )
 from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
+from froot.loops import registry
 from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
 from froot.policy.canary import is_canary, score_probe
 from froot.policy.naming import (
@@ -562,6 +563,7 @@ def _bump_loops(
             LoopView(
                 loop=loop.value,
                 title=_loop_title(loop),
+                icon=registry.get(loop).dashboard_icon,
                 scan_loops=_scan_loops(repos, (loop,), scans),
                 scan_interval_seconds=scan_interval_seconds,
                 track_record=_track_record(loop_rows),

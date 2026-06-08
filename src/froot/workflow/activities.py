@@ -27,7 +27,6 @@ from froot.domain.changelog import (
 )
 from froot.domain.ci import CIStatus
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
-from froot.domain.loop import Loop
 from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
 from froot.domain.repo import TargetRepo
@@ -75,6 +74,7 @@ from froot.workflow.types import (
 )
 
 if TYPE_CHECKING:
+    from froot.domain.loop import Loop
     from froot.ports.protocols import PackageManager
 
 _log = logging.getLogger("froot.outcome")
@@ -91,15 +91,28 @@ def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
 
 
 def _draft_for(params: OpenPrInput) -> PullRequestDraft:
-    """Build the PR draft for the work item — bump vs removal compose."""
+    """Build the PR draft for the work item — bump vs removal compose.
+
+    The PR-title verb is the loop's, resolved from its registered spec here (the
+    impure boundary) and passed into the pure draft builders.
+    """
+    from froot.loops import registry
+
     item = params.candidate
+    title_prefix = registry.get(params.loop).title_prefix
     match item:
         case Candidate():
             return pull_request_draft(
-                params.target, item, params.verdict, params.loop
+                params.target,
+                item,
+                params.verdict,
+                params.loop,
+                title_prefix=title_prefix,
             )
         case Removal():
-            return removal_pull_request_draft(params.target, item, params.loop)
+            return removal_pull_request_draft(
+                params.target, item, params.loop, title_prefix=title_prefix
+            )
     assert_never(item)
 
 
@@ -122,85 +135,16 @@ async def _select_candidates(
     Returns ``(considered, items)`` — ``considered`` is the size of the upstream
     signal (available upgrades / advisories found / unused deps flagged) so the
     scan can make its selectivity legible (how much was seen versus kept).
+
+    The one genuinely per-loop body now lives in each loop's spec ``observe``
+    (see :mod:`froot.loops`); the spine looks the loop up and runs it, so this
+    selection seam needs no per-loop arm.
     """
-    match loop:
-        case Loop.DEPENDENCY_PATCH:
-            from froot.policy.candidates import select_patch_candidates
+    from froot.loops import registry
 
-            upgrades = await package_manager.list_upgrades(target, manifest_dir)
-            return len(upgrades), select_patch_candidates(upgrades)
-        case Loop.SECURITY_PATCH:
-            return await _select_security_candidates(
-                target, package_manager, manifest_dir
-            )
-        case Loop.DEAD_CODE:
-            return await _select_dead_code_candidates(
-                package_manager, target, manifest_dir
-            )
-    assert_never(loop)
-
-
-async def _select_security_candidates(
-    target: TargetRepo, package_manager: PackageManager, manifest_dir: Path
-) -> tuple[int, tuple[Candidate, ...]]:
-    """Security signal: installed set, OSV advisories, clearing targets.
-
-    ``considered`` is the count of advisories OSV returned for the installed
-    set — the vulnerabilities in scope this tick, before selection narrows to
-    the ones a forward-stable bump can actually clear.
-    """
-    from froot.adapters.osv import OsvAdvisorySource
-    from froot.policy.candidates import select_security_candidates
-
-    installed = await package_manager.list_installed(target, manifest_dir)
-    advisories = await OsvAdvisorySource().advisories(installed)
-    return len(advisories), select_security_candidates(installed, advisories)
-
-
-async def _select_dead_code_candidates(
-    package_manager: PackageManager,
-    target: TargetRepo,
-    manifest_dir: Path,
-) -> tuple[int, tuple[Removal, ...]]:
-    """Dead-code signal: unused deps flagged, then vetoed safe-to-remove.
-
-    The static analyzer flags every unused direct dependency; the safe-to-remove
-    judge then vetoes each — only a ``clean`` survives to become a PR, so a tool
-    used without an import (pytest, eslint) is dropped before it ever opens one.
-    This is the loop's one thin model call, framed by the loop and run *at the
-    signal* (a vetoed removal never starts a workflow — "veto at the signal").
-    A judge error drops that removal (fail-safe: never propose what could not be
-    vetted). ``considered`` is the flagged count; the kept count is the
-    survivors, so the scan tick shows how much the veto filtered.
-    """
-    from froot.adapters.model_judge import PydanticAiJudge
-
-    flagged = await package_manager.list_unused(target, manifest_dir)
-    if not flagged:
-        return 0, ()
-    judge = PydanticAiJudge()
-    kept: list[Removal] = []
-    for removal in flagged:
-        try:
-            verdict = await judge.judge_removal(removal)
-        except Exception as exc:
-            activity.logger.warning(
-                "safe-to-remove judge unavailable for %s; skipping: %r",
-                removal.package,
-                exc,
-            )
-            continue
-        if verdict.kind != "clean":
-            continue
-        # Carry the judge's reasoning into the work item so the PR body explains
-        # why the removal is safe, beside the detector note.
-        enriched = (
-            f"{removal.justification}; {verdict.rationale}"
-            if removal.justification
-            else verdict.rationale
-        )
-        kept.append(removal.model_copy(update={"justification": enriched}))
-    return len(flagged), tuple(kept)
+    return await registry.get(loop).observe(
+        target, package_manager, manifest_dir
+    )
 
 
 @activity.defn
@@ -606,11 +550,13 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
     if not BehaviorSettings().reconcile:
         return 0
     # Reconcile is version-supersession cleanup, which only bump loops have: a
-    # removal carries no version to be overtaken. Skip dead-code rather than
-    # re-run its signal (knip + the veto judge) every tick only to close
-    # nothing. (A removal-specific reconcile — close when no longer unused — is
-    # future work.)
-    if params.loop is Loop.DEAD_CODE:
+    # removal carries no version to be overtaken. A loop that does not reconcile
+    # (dead-code) is skipped rather than re-running its signal (knip + the veto
+    # judge) every tick only to close nothing. (A removal-specific reconcile —
+    # close when no longer unused — is future work.) The trait is on the spec.
+    from froot.loops import registry
+
+    if not registry.get(params.loop).reconciles:
         return 0
 
     target, loop = params.target, params.loop

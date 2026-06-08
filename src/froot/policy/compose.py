@@ -83,23 +83,13 @@ def _verdict_summary(verdict: ChangelogVerdict) -> str:
     assert_never(verdict)
 
 
-def _title_prefix(loop: Loop) -> str:
-    """The PR-title verb for a loop (deps / security / dead-code)."""
-    match loop:
-        case Loop.DEPENDENCY_PATCH:
-            return "deps"
-        case Loop.SECURITY_PATCH:
-            return "security"
-        case Loop.DEAD_CODE:
-            return "dead-code"
-    assert_never(loop)
-
-
 def pull_request_draft(
     target: TargetRepo,
     candidate: Candidate,
     verdict: ChangelogVerdict,
     loop: Loop = Loop.DEPENDENCY_PATCH,
+    *,
+    title_prefix: str,
 ) -> PullRequestDraft:
     """Build the deterministic PR content for a bump (no model call).
 
@@ -107,8 +97,9 @@ def pull_request_draft(
         target: The repo the PR is opened against (gives the base branch).
         candidate: The bump being proposed.
         verdict: The model's changelog framing, surfaced for the reviewer.
-        loop: Which loop is proposing — sets the branch namespace and the title
-            verb, and (via ``candidate.justification``) the body's "why".
+        loop: Which loop is proposing — sets the branch namespace and (via
+            ``candidate.justification``) the body's "why".
+        title_prefix: The PR-title verb (``deps`` / ``security`` …), from spec.
 
     Returns:
         A :class:`PullRequestDraft` ready for the forge to open.
@@ -130,8 +121,7 @@ def pull_request_draft(
         branch=branch_name(candidate, loop),
         base=target.default_branch,
         title=(
-            f"{_title_prefix(loop)}: bump {candidate.package} "
-            f"to {candidate.target}"
+            f"{title_prefix}: bump {candidate.package} to {candidate.target}"
         ),
         body="\n".join(lines),
     )
@@ -141,6 +131,8 @@ def removal_pull_request_draft(
     target: TargetRepo,
     removal: Removal,
     loop: Loop = Loop.DEPENDENCY_PATCH,
+    *,
+    title_prefix: str,
 ) -> PullRequestDraft:
     """Build the deterministic PR content for a removal (no model call).
 
@@ -152,8 +144,8 @@ def removal_pull_request_draft(
     Args:
         target: The repo the PR is opened against (gives the base branch).
         removal: The unused dependency being removed.
-        loop: Which loop is proposing — sets the branch namespace and the title
-            verb.
+        loop: Which loop is proposing — sets the branch namespace.
+        title_prefix: The PR-title verb (``dead-code`` …), from the loop's spec.
 
     Returns:
         A :class:`PullRequestDraft` ready for the forge to open.
@@ -173,7 +165,7 @@ def removal_pull_request_draft(
     return PullRequestDraft(
         branch=branch_name(removal, loop),
         base=target.default_branch,
-        title=f"{_title_prefix(loop)}: remove {removal.package} (unused)",
+        title=f"{title_prefix}: remove {removal.package} (unused)",
         body="\n".join(lines),
     )
 

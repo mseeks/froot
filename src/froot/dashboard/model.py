@@ -463,6 +463,7 @@ class LoopView(Frozen):
     Attributes:
         loop: The loop key (``dependency-patch`` / ``security-patch``).
         title: The human title for the tab.
+        icon: The tab's icon key, from the loop's registered spec.
         scan_loops: Liveness of this loop's per-repo scan schedules.
         scan_interval_seconds: This loop's scan cadence (telemetry-in-context).
         track_record: This loop's reputation headline.
@@ -478,6 +479,7 @@ class LoopView(Frozen):
 
     loop: str
     title: str
+    icon: str
     scan_loops: tuple[ScanLoop, ...]
     scan_interval_seconds: int
     track_record: TrackRecord

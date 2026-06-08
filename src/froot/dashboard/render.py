@@ -890,9 +890,7 @@ def page(model: DashboardModel) -> str:
     tabs: list[tuple[str, str, str, str, str, str]] = []
     for i, view in enumerate(model.bump_loops):
         pid, tid = f"panel-{i}", f"tab-{i}"
-        icon = {"security-patch": "shield", "dead-code": "scissors"}.get(
-            view.loop, "package"
-        )
+        icon = view.icon
         tabs.append(
             (
                 tid,

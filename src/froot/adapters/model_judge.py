@@ -92,28 +92,17 @@ _REMOVAL_SYSTEM_PROMPT = (
 
 
 def _loop_context(loop: Loop) -> str:
-    """The one line that tells the model what kind of bump it is judging."""
-    match loop:
-        case Loop.DEPENDENCY_PATCH:
-            return (
-                "This is a patch-level upgrade; weigh whether the notes hide "
-                "any behavioral change behind a 'patch'."
-            )
-        case Loop.SECURITY_PATCH:
-            return (
-                "This is a SECURITY upgrade that may cross a minor or major "
-                "line to clear a vulnerability; weigh breaking changes the "
-                "human should know before merging — the fix is still worth it."
-            )
-        case Loop.DEAD_CODE:
-            # The dead-code loop judges removals via ``judge_removal``, not the
-            # changelog judge, so this context is never reached in practice;
-            # kept for match exhaustiveness with a sensible fallback.
-            return (
-                "This concerns an unused-dependency check; weigh whether the "
-                "package is genuinely unused before treating notes as decisive."
-            )
-    assert_never(loop)
+    """The framing line telling the model what kind of bump it is judging.
+
+    Sourced from the loop's registered spec (see :mod:`froot.loops`). Only
+    changelog-judging loops reach this; a loop without a changelog judge
+    (dead-code, whose judgment is a signal-time safe-to-remove veto) has a
+    ``judge_context`` of ``None`` and never gets here — the empty fallback just
+    keeps the call total.
+    """
+    from froot.loops import registry
+
+    return registry.get(loop).judge_context or ""
 
 
 class _Assessment(BaseModel):

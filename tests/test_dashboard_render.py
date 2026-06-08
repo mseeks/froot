@@ -148,6 +148,26 @@ def test_dead_code_loop_renders_with_scissors_and_unused():
     assert "unused" in html  # the removal's target column, not a version
 
 
+def test_loop_tab_icon_is_spec_driven_not_a_hardcoded_map() -> None:
+    # The dashboard-from-registry milestone: a loop's tab presentation flows
+    # from its registered spec, so changing the spec's icon changes the rendered
+    # tab with NO renderer edit (the renderer no longer keys icons by loop).
+    from dataclasses import replace
+
+    from froot.dashboard.render import _ICONS
+    from froot.loops import registry
+
+    original = registry.get(Loop.DEPENDENCY_PATCH)
+    assert original.dashboard_icon == "package"
+    try:
+        registry.register(replace(original, dashboard_icon="layers"))
+        html = render.page(_model())
+        assert _ICONS["layers"] in html  # the spec's new icon is rendered
+        assert _ICONS["package"] not in html  # the old one is gone
+    finally:
+        registry.register(original)  # restore for the other tests
+
+
 def test_theme_toggle_is_present_and_light_is_the_default():
     html = render.page(_model())
     # Light is the :root default; dark applies via system pref or the toggle.
