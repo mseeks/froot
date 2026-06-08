@@ -140,8 +140,10 @@ def _ensure() -> None:
     # Importing each module runs its module-level register(...) call. Kept here,
     # not at package import, so the registry has no import-order constraints.
     from froot.loops import (  # noqa: F401
+        a11y_review,
         dead_code,
         dependency_patch,
+        determinism_review,
         security_patch,
     )
 

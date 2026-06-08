@@ -9,6 +9,8 @@ tests, which now route through the registry.
 
 from __future__ import annotations
 
+import pytest
+
 from froot.adapters.model_judge import _loop_context
 from froot.domain.loop import Loop
 from froot.loops import registry
@@ -69,3 +71,20 @@ def test_disposition_is_derived_from_the_tail_type() -> None:
         tail=AdvisoryTail(marker="<!-- m -->", panel_title="Review"),
     )
     assert advisory.disposition is Disposition.EMIT_SIGNAL
+
+
+def test_advisory_loops_registered_as_emit_signal() -> None:
+    from froot.loops.registry import AdvisoryTail
+
+    specs = {spec.loop: spec for spec in registry.all_specs()}
+    for loop in (Loop.DETERMINISM_REVIEW, Loop.A11Y_REVIEW):
+        spec = specs[loop]
+        assert spec.disposition is Disposition.EMIT_SIGNAL
+        assert isinstance(spec.tail, AdvisoryTail)
+        assert spec.tail.marker and spec.tail.panel_title
+
+
+def test_commit_tail_rejects_an_advisory_loop() -> None:
+    # An advisory loop reaching an acting code path fails loudly, not silently.
+    with pytest.raises(TypeError):
+        registry.commit_tail(Loop.DETERMINISM_REVIEW)
