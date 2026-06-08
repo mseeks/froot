@@ -4,13 +4,11 @@ from datetime import UTC, datetime
 
 from froot.dashboard import read_model
 from froot.dashboard.github_source import GithubPr
-from froot.dashboard.model import DashboardModel, RunTelemetry
+from froot.dashboard.model import AdvisoryView, DashboardModel, RunTelemetry
 from froot.dashboard.temporal_source import (
-    A11yExecution,
+    AdvisoryExecution,
     BumpExecution,
-    PrA11yExecution,
-    PrReviewExecution,
-    ReviewExecution,
+    PrAdvisoryExecution,
     ScanExecution,
 )
 from froot.domain.loop import Loop
@@ -89,26 +87,24 @@ def _assemble(
     prs: list[GithubPr],
     scans: list[ScanExecution],
     bumps: list[BumpExecution],
-    reviews: list[ReviewExecution] | None = None,
-    pr_reviews: list[PrReviewExecution] | None = None,
-    a11y_reviews: list[A11yExecution] | None = None,
-    pr_a11y_reviews: list[PrA11yExecution] | None = None,
+    advisory: list[AdvisoryExecution] | None = None,
+    pr_advisory: list[PrAdvisoryExecution] | None = None,
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
         temporal=(
             (
                 tuple(scans),
                 tuple(bumps),
-                tuple(reviews or ()),
-                tuple(pr_reviews or ()),
-                tuple(a11y_reviews or ()),
-                tuple(pr_a11y_reviews or ()),
+                tuple(advisory or ()),
+                tuple(pr_advisory or ()),
             ),
             None,
         ),
@@ -313,10 +309,12 @@ def test_source_health_reflects_errors():
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((), "boom"),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     health = {s.name: s for s in model.sources}
@@ -326,9 +324,13 @@ def test_source_health_reflects_errors():
     assert health["clickhouse"].ok is False  # "off"
 
 
-# ── Determinism review loop ──────────────────────────────────────────────────
-def _review(status: str = "running") -> ReviewExecution:
-    return ReviewExecution(
+# ── The advisory family (determinism-review + a11y-review) ───────────────────
+# Both advisory loops flow through one generic read-model path, partitioned by
+# their loop tag. These exercise it per loop and assert the two never
+# cross-attribute through the shared code.
+def _review(status: str = "running") -> AdvisoryExecution:
+    return AdvisoryExecution(
+        loop=Loop.DETERMINISM_REVIEW,
         workflow_id="froot-review-mseeks-revisionist",
         status=status,
         start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
@@ -340,10 +342,11 @@ def _pr_review(
     *,
     status: str = "completed",
     findings: int = 0,
-    rules: tuple[str, ...] = (),
+    detail: tuple[str, ...] = (),
     head: str = "abc1234def56",
-) -> PrReviewExecution:
-    return PrReviewExecution(
+) -> PrAdvisoryExecution:
+    return PrAdvisoryExecution(
+        loop=Loop.DETERMINISM_REVIEW,
         workflow_id=f"froot-pr-review-mseeks-revisionist-{pr}-{head}",
         status=status,
         start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
@@ -351,62 +354,14 @@ def _pr_review(
         pr_number=pr,
         head_sha=head,
         findings=findings,
-        rules=rules,
+        detail=detail,
         comment_url=None,
     )
 
 
-def test_review_loop_live_when_running():
-    model = _assemble([], [], [], reviews=[_review("running")])
-    assert len(model.review_loops) == 1
-    assert model.review_loops[0].repo == REPO
-    assert model.review_loops[0].live is True
-
-
-def test_review_loop_omitted_when_no_execution():
-    # Reviews are scoped to the Temporal repos; a repo with no review loop is
-    # left out, not shown as a dead one (unlike the scan heartbeat).
-    assert _assemble([], [], []).review_loops == ()
-
-
-def test_review_record_counts_findings_clean_and_hazards():
-    pr_reviews = [
-        _pr_review(
-            1, findings=2, rules=("datetime.datetime.now", "random.random")
-        ),
-        _pr_review(2, findings=0),
-        _pr_review(3, findings=1, rules=("time.time",)),
-    ]
-    model = _assemble([], [], [], reviews=[_review()], pr_reviews=pr_reviews)
-    r = model.review_record
-    assert (r.reviewed, r.flagged, r.clean, r.hazards) == (3, 2, 1, 3)
-    assert r.repos_covered == 1
-
-
-def test_review_row_attributes_repo_and_pr_url():
-    model = _assemble(
-        [], [], [], pr_reviews=[_pr_review(7, findings=1, rules=("time.time",))]
-    )
-    row = model.reviews[0]
-    assert row.repo == REPO
-    assert row.pr_url == f"https://github.com/{REPO}/pull/7"
-    assert row.pr_number == 7
-    assert row.rules == ("time.time",)
-
-
-def test_review_record_ignores_incomplete_reviews():
-    pr_reviews = [
-        _pr_review(1, status="running", findings=0),
-        _pr_review(2, status="completed", findings=1, rules=("time.time",)),
-    ]
-    model = _assemble([], [], [], pr_reviews=pr_reviews)
-    assert model.review_record.reviewed == 1  # only the completed one
-    assert model.review_record.flagged == 1
-
-
-# ── Source-level a11y review loop ────────────────────────────────────────────
-def _a11y(status: str = "running") -> A11yExecution:
-    return A11yExecution(
+def _a11y(status: str = "running") -> AdvisoryExecution:
+    return AdvisoryExecution(
+        loop=Loop.A11Y_REVIEW,
         workflow_id="froot-a11y-mseeks-revisionist",
         status=status,
         start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
@@ -418,10 +373,11 @@ def _pr_a11y(
     *,
     status: str = "completed",
     findings: int = 0,
-    kinds: tuple[str, ...] = (),
+    detail: tuple[str, ...] = (),
     head: str = "abc1234def56",
-) -> PrA11yExecution:
-    return PrA11yExecution(
+) -> PrAdvisoryExecution:
+    return PrAdvisoryExecution(
+        loop=Loop.A11Y_REVIEW,
         workflow_id=f"froot-pr-a11y-mseeks-revisionist-{pr}-{head}",
         status=status,
         start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
@@ -429,35 +385,104 @@ def _pr_a11y(
         pr_number=pr,
         head_sha=head,
         findings=findings,
-        kinds=kinds,
+        detail=detail,
         comment_url=None,
     )
 
 
+def _view(model: DashboardModel, loop: Loop) -> AdvisoryView:
+    (view,) = [v for v in model.advisory if v.loop == loop]
+    return view
+
+
+def test_advisory_views_one_per_registered_emit_signal_loop():
+    # The advisory tabs are derived from the registry's emit-signal specs, with
+    # each view's presentation (title, icon) read straight from its spec.
+    model = _assemble([], [], [])
+    loops = {v.loop for v in model.advisory}
+    assert Loop.DETERMINISM_REVIEW in loops
+    assert Loop.A11Y_REVIEW in loops
+    det = _view(model, Loop.DETERMINISM_REVIEW)
+    assert det.title == "Determinism review"  # from the spec's panel_title
+    assert det.icon == "search"  # from the spec's dashboard_icon
+
+
+def test_review_loop_live_when_running():
+    model = _assemble([], [], [], advisory=[_review("running")])
+    det = _view(model, Loop.DETERMINISM_REVIEW)
+    assert len(det.loops) == 1
+    assert det.loops[0].repo == REPO
+    assert det.loops[0].live is True
+
+
+def test_review_loop_omitted_when_no_execution():
+    # Reviews are scoped to the Temporal repos; a repo with no review loop is
+    # left out, not shown as a dead one (unlike the scan heartbeat).
+    assert _view(_assemble([], [], []), Loop.DETERMINISM_REVIEW).loops == ()
+
+
+def test_review_record_counts_findings_clean_and_total():
+    pr_reviews = [
+        _pr_review(
+            1, findings=2, detail=("datetime.datetime.now", "random.random")
+        ),
+        _pr_review(2, findings=0),
+        _pr_review(3, findings=1, detail=("time.time",)),
+    ]
+    model = _assemble([], [], [], advisory=[_review()], pr_advisory=pr_reviews)
+    r = _view(model, Loop.DETERMINISM_REVIEW).record
+    assert (r.reviewed, r.flagged, r.clean, r.findings) == (3, 2, 1, 3)
+    assert r.repos_covered == 1
+
+
+def test_review_row_attributes_repo_and_pr_url():
+    model = _assemble(
+        [],
+        [],
+        [],
+        pr_advisory=[_pr_review(7, findings=1, detail=("time.time",))],
+    )
+    row = _view(model, Loop.DETERMINISM_REVIEW).rows[0]
+    assert row.repo == REPO
+    assert row.pr_url == f"https://github.com/{REPO}/pull/7"
+    assert row.pr_number == 7
+    assert row.detail == ("time.time",)
+
+
+def test_review_record_ignores_incomplete_reviews():
+    pr_reviews = [
+        _pr_review(1, status="running", findings=0),
+        _pr_review(2, status="completed", findings=1, detail=("time.time",)),
+    ]
+    model = _assemble([], [], [], pr_advisory=pr_reviews)
+    r = _view(model, Loop.DETERMINISM_REVIEW).record
+    assert r.reviewed == 1  # only the completed one
+    assert r.flagged == 1
+
+
 def test_a11y_loop_live_when_running():
-    model = _assemble([], [], [], a11y_reviews=[_a11y("running")])
-    assert len(model.a11y_loops) == 1
-    assert model.a11y_loops[0].repo == REPO
-    assert model.a11y_loops[0].live is True
+    model = _assemble([], [], [], advisory=[_a11y("running")])
+    a11y = _view(model, Loop.A11Y_REVIEW)
+    assert len(a11y.loops) == 1
+    assert a11y.loops[0].repo == REPO
+    assert a11y.loops[0].live is True
 
 
 def test_a11y_loop_omitted_when_no_execution():
     # Like the review loop: a11y is scoped to the Temporal repos, so a repo
     # with no a11y loop is left out, not shown as a dead one.
-    assert _assemble([], [], []).a11y_loops == ()
+    assert _view(_assemble([], [], []), Loop.A11Y_REVIEW).loops == ()
 
 
-def test_a11y_record_counts_findings_clean_and_issues():
+def test_a11y_record_counts_findings_clean_and_total():
     pr_a11y = [
-        _pr_a11y(1, findings=2, kinds=("missing-alt", "unlabeled-control")),
+        _pr_a11y(1, findings=2, detail=("missing-alt", "unlabeled-control")),
         _pr_a11y(2, findings=0),
-        _pr_a11y(3, findings=1, kinds=("missing-alt",)),
+        _pr_a11y(3, findings=1, detail=("missing-alt",)),
     ]
-    model = _assemble(
-        [], [], [], a11y_reviews=[_a11y()], pr_a11y_reviews=pr_a11y
-    )
-    r = model.a11y_record
-    assert (r.reviewed, r.flagged, r.clean, r.issues) == (3, 2, 1, 3)
+    model = _assemble([], [], [], advisory=[_a11y()], pr_advisory=pr_a11y)
+    r = _view(model, Loop.A11Y_REVIEW).record
+    assert (r.reviewed, r.flagged, r.clean, r.findings) == (3, 2, 1, 3)
     assert r.repos_covered == 1
 
 
@@ -466,23 +491,46 @@ def test_a11y_row_attributes_repo_and_pr_url():
         [],
         [],
         [],
-        pr_a11y_reviews=[_pr_a11y(7, findings=1, kinds=("missing-alt",))],
+        pr_advisory=[_pr_a11y(7, findings=1, detail=("missing-alt",))],
     )
-    row = model.a11y_reviews[0]
+    row = _view(model, Loop.A11Y_REVIEW).rows[0]
     assert row.repo == REPO
     assert row.pr_url == f"https://github.com/{REPO}/pull/7"
     assert row.pr_number == 7
-    assert row.kinds == ("missing-alt",)
+    assert row.detail == ("missing-alt",)
 
 
 def test_a11y_record_ignores_incomplete_reviews():
     pr_a11y = [
         _pr_a11y(1, status="running", findings=0),
-        _pr_a11y(2, status="completed", findings=1, kinds=("missing-alt",)),
+        _pr_a11y(2, status="completed", findings=1, detail=("missing-alt",)),
     ]
-    model = _assemble([], [], [], pr_a11y_reviews=pr_a11y)
-    assert model.a11y_record.reviewed == 1  # only the completed one
-    assert model.a11y_record.flagged == 1
+    model = _assemble([], [], [], pr_advisory=pr_a11y)
+    r = _view(model, Loop.A11Y_REVIEW).record
+    assert r.reviewed == 1  # only the completed one
+    assert r.flagged == 1
+
+
+def test_advisory_loops_do_not_cross_attribute():
+    # The two loops share the generic read-model path but are partitioned by
+    # their loop tag: a determinism review never lands on the a11y view, and
+    # each carries only its own findings.
+    model = _assemble(
+        [],
+        [],
+        [],
+        advisory=[_review(), _a11y()],
+        pr_advisory=[
+            _pr_review(1, findings=1, detail=("time.time",)),
+            _pr_a11y(2, findings=1, detail=("missing-alt",)),
+        ],
+    )
+    det = _view(model, Loop.DETERMINISM_REVIEW)
+    a11y = _view(model, Loop.A11Y_REVIEW)
+    assert [r.pr_number for r in det.rows] == [1]
+    assert det.rows[0].detail == ("time.time",)
+    assert [r.pr_number for r in a11y.rows] == [2]
+    assert a11y.rows[0].detail == ("missing-alt",)
 
 
 # ── Earned-autonomy class gates (the shadow gate) ────────────────────────────
@@ -510,10 +558,12 @@ def _assemble_p(
         loops=(Loop.DEPENDENCY_PATCH,),
         policy=policy,
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
-        temporal=(((), tuple(bumps), (), (), (), ()), None),
+        temporal=(((), tuple(bumps), (), ()), None),
         telemetry=_telemetry_off(),
         outcomes=outcomes,
         environment=environment,
@@ -739,10 +789,12 @@ def _assemble_outcomes(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=_telemetry_off(),
         outcomes=outcomes,
         reliability_window_days=90,
@@ -883,10 +935,12 @@ def test_bump_loops_partition_each_loop_into_its_own_view():
         repos=(REPO,),
         loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((dep, sec), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}
@@ -910,10 +964,12 @@ def test_dead_code_loop_renders_removal_shape():
         repos=(REPO,),
         loops=(Loop.DEAD_CODE,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((rm,), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}
@@ -944,10 +1000,12 @@ def test_bump_loops_attribute_failures_by_workflow_id():
         repos=(REPO,),
         loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((), None),
-        temporal=(((), (dep_fail, sec_fail), (), (), (), ()), None),
+        temporal=(((), (dep_fail, sec_fail), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}
