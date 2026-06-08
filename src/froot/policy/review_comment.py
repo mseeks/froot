@@ -68,23 +68,30 @@ def synthesize_findings(
 
 def render_review_comment(
     findings: Sequence[ReviewFinding], head_sha: str
-) -> str | None:
-    """Render the marker-tagged comment body, or None when there's nothing."""
+) -> str:
+    """Render the marker-tagged comment body (always a body, for true decay).
+
+    With findings, the hazard list; with none, an explicit all-clear so a PR
+    whose hazards were fixed gets its comment overwritten instead of lingering
+    stale. :func:`should_post` decides whether this body is actually posted.
+    """
+    out = [REVIEW_MARKER, "", "### 🧭 froot determinism review", ""]
     if not findings:
-        return None
-    out = [
-        REVIEW_MARKER,
-        "",
-        "### 🧭 froot determinism review",
-        "",
-        (
-            "Transitive determinism hazards reachable from this repo's "
-            f"Temporal workflows at `{head_sha[:7]}`. **Advisory** — the "
-            "blocking gate is the `Determinism` CI check; this loop catches "
-            "what that lexical check can't see across calls."
-        ),
-        "",
-    ]
+        out.append(
+            "✅ No transitive determinism hazards reachable from this repo's "
+            f"Temporal workflows at `{head_sha[:7]}`."
+        )
+        out.extend(
+            ["", "_Reviewed by froot · re-runs update this comment in place._"]
+        )
+        return "\n".join(out)
+    out.append(
+        "Transitive determinism hazards reachable from this repo's "
+        f"Temporal workflows at `{head_sha[:7]}`. **Advisory** — the "
+        "blocking gate is the `Determinism` CI check; this loop catches "
+        "what that lexical check can't see across calls."
+    )
+    out.append("")
     for finding in findings:
         origin = (
             "static call-path"
@@ -101,3 +108,13 @@ def render_review_comment(
         ["", "_Reviewed by froot · re-runs update this comment in place._"]
     )
     return "\n".join(out)
+
+
+def should_post(*, has_findings: bool, comment_exists: bool) -> bool:
+    """Whether to (re)post the comment this tick — the decay rule.
+
+    Post when there is something to say OR a prior comment must be cleared. A
+    clean PR that never had a comment stays silent; a PR whose hazards were
+    fixed gets its comment overwritten with the all-clear.
+    """
+    return has_findings or comment_exists

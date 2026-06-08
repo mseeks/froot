@@ -13,6 +13,7 @@ from froot.domain.determinism import (
 from froot.policy.review_comment import (
     REVIEW_MARKER,
     render_review_comment,
+    should_post,
     synthesize_findings,
 )
 
@@ -65,8 +66,18 @@ def test_synthesize_requires_aligned_frontier_and_verdicts():
         synthesize_findings((), (_frontier("httpx", 2),), ())
 
 
-def test_render_none_when_empty():
-    assert render_review_comment((), "abc1234def") is None
+def test_render_all_clear_when_empty():
+    # True decay: an empty review renders an explicit all-clear (never None), so
+    # a PR whose hazards were fixed gets its comment overwritten, not kept.
+    body = render_review_comment((), "abc1234def")
+    assert body.startswith(REVIEW_MARKER)
+    assert "✅" in body and "No transitive determinism hazards" in body
+
+
+def test_should_post_is_the_decay_rule():
+    assert should_post(has_findings=True, comment_exists=False) is True
+    assert should_post(has_findings=False, comment_exists=True) is True
+    assert should_post(has_findings=False, comment_exists=False) is False
 
 
 def test_render_carries_marker_and_facts():

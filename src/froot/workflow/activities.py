@@ -49,7 +49,13 @@ from froot.policy.naming import (
     pr_a11y_review_workflow_id,
     pr_review_workflow_id,
 )
-from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
+from froot.policy.review_comment import (
+    REVIEW_MARKER,
+    render_review_comment,
+)
+from froot.policy.review_comment import (
+    should_post as should_post_review,
+)
 from froot.workflow.types import (
     AdjudicateA11yInput,
     AdjudicateInput,
@@ -99,7 +105,7 @@ def _draft_for(params: OpenPrInput) -> PullRequestDraft:
     from froot.loops import registry
 
     item = params.candidate
-    title_prefix = registry.get(params.loop).title_prefix
+    title_prefix = registry.commit_tail(params.loop).title_prefix
     match item:
         case Candidate():
             return pull_request_draft(
@@ -142,7 +148,7 @@ async def _select_candidates(
     """
     from froot.loops import registry
 
-    return await registry.get(loop).observe(
+    return await registry.commit_tail(loop).observe(
         target, package_manager, manifest_dir
     )
 
@@ -556,7 +562,7 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
     # close when no longer unused — is future work.) The trait is on the spec.
     from froot.loops import registry
 
-    if not registry.get(params.loop).reconciles:
+    if not registry.commit_tail(params.loop).reconciles:
         return 0
 
     target, loop = params.target, params.loop
@@ -694,13 +700,24 @@ async def adjudicate_frontier(
 
 @activity.defn
 async def post_review(params: PostReviewInput) -> str | None:
-    """Upsert the advisory comment (when there are findings); log the ledger."""
+    """Upsert (or clear) the advisory comment; log the ledger row.
+
+    Posts when there are findings, or when a prior comment must be cleared to
+    "all clear" (true decay — a PR whose hazards were fixed never keeps a stale
+    finding list). A clean PR with no prior comment stays silent.
+    """
     from froot.adapters.github import GitHubForge
 
-    body = render_review_comment(params.findings, params.pr.head_sha)
+    forge = GitHubForge()
+    exists = await forge.find_marked_comment(
+        params.target, params.pr.number, REVIEW_MARKER
+    )
     url: str | None = None
-    if body is not None:
-        url = await GitHubForge().upsert_issue_comment(
+    if should_post_review(
+        has_findings=bool(params.findings), comment_exists=exists
+    ):
+        body = render_review_comment(params.findings, params.pr.head_sha)
+        url = await forge.upsert_issue_comment(
             params.target, params.pr.number, REVIEW_MARKER, body
         )
     _review_log.info(

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from froot.domain.loop import Loop
-from froot.loops.registry import Disposition, LoopSpec, register
+from froot.loops.registry import CommitTail, LoopSpec, register
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,10 +50,11 @@ async def observe(
 register(
     LoopSpec(
         loop=Loop.SECURITY_PATCH,
-        disposition=Disposition.COMMIT_OR_REVERT,
-        observe=observe,
-        title_prefix="security",
-        judge_context=_JUDGE_CONTEXT,
         dashboard_icon="shield",
+        tail=CommitTail(
+            observe=observe,
+            title_prefix="security",
+            judge_context=_JUDGE_CONTEXT,
+        ),
     )
 )
