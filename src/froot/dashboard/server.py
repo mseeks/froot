@@ -126,8 +126,10 @@ async def build_html(client: Client) -> str:
         loops=loops,
         policy=policy,
         scan_interval_seconds=interval,
-        review_interval_seconds=_review_interval(),
-        a11y_interval_seconds=_a11y_interval(),
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: _review_interval(),
+            Loop.A11Y_REVIEW: _a11y_interval(),
+        },
         github=github_result,
         temporal=temporal_result,
         telemetry=telemetry_result,

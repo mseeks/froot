@@ -7,11 +7,9 @@ from froot.dashboard import read_model, render
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import ActivityStat, DashboardModel, RunTelemetry
 from froot.dashboard.temporal_source import (
-    A11yExecution,
+    AdvisoryExecution,
     BumpExecution,
-    PrA11yExecution,
-    PrReviewExecution,
-    ReviewExecution,
+    PrAdvisoryExecution,
     ScanExecution,
 )
 from froot.domain.loop import Loop
@@ -25,10 +23,8 @@ def _model(
     prs: Sequence[GithubPr] = (),
     scans: Sequence[ScanExecution] = (),
     telemetry: tuple[RunTelemetry, str | None] | None = None,
-    reviews: Sequence[ReviewExecution] = (),
-    pr_reviews: Sequence[PrReviewExecution] = (),
-    a11y_reviews: Sequence[A11yExecution] = (),
-    pr_a11y_reviews: Sequence[PrA11yExecution] = (),
+    advisory: Sequence[AdvisoryExecution] = (),
+    pr_advisory: Sequence[PrAdvisoryExecution] = (),
 ) -> DashboardModel:
     if telemetry is None:
         telemetry = (
@@ -46,18 +42,13 @@ def _model(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
         temporal=(
-            (
-                tuple(scans),
-                (),
-                tuple(reviews),
-                tuple(pr_reviews),
-                tuple(a11y_reviews),
-                tuple(pr_a11y_reviews),
-            ),
+            (tuple(scans), (), tuple(advisory), tuple(pr_advisory)),
             None,
         ),
         telemetry=telemetry,
@@ -126,10 +117,12 @@ def test_dead_code_loop_renders_with_scissors_and_unused():
         repos=(REPO,),
         loops=(Loop.DEAD_CODE,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((rm,), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=(
             RunTelemetry(
                 available=False,
@@ -259,116 +252,119 @@ def test_scan_cadence_shows_liveness_and_next_due():
     assert "next" in html  # the next-due hint for the live loop
 
 
-# ── determinism review tab ───────────────────────────────────────────────────
-def _review(status: str = "running") -> ReviewExecution:
-    return ReviewExecution(
-        workflow_id="froot-review-mseeks-revisionist",
+# ── the advisory family tabs (determinism-review, a11y-review) ───────────────
+# Both advisory loops render through one generic, registry-driven tab. These
+# exercise that tab via the determinism loop, plus the a11y loop where the two
+# must stay distinct (no cross-attribution through the shared renderer).
+def _adv_loop(
+    loop: Loop, slug: str, status: str = "running"
+) -> AdvisoryExecution:
+    return AdvisoryExecution(
+        loop=loop,
+        workflow_id=f"froot-{slug}-mseeks-revisionist",
         status=status,
         start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
     )
 
 
-def _pr_review(
+def _pr_adv(
+    loop: Loop,
+    slug: str,
     pr: int,
     findings: int,
-    rules: tuple[str, ...],
+    detail: tuple[str, ...],
     comment: str | None = None,
-) -> PrReviewExecution:
-    return PrReviewExecution(
-        workflow_id=f"froot-pr-review-mseeks-revisionist-{pr}-abc1234def56",
+) -> PrAdvisoryExecution:
+    return PrAdvisoryExecution(
+        loop=loop,
+        workflow_id=f"froot-pr-{slug}-mseeks-revisionist-{pr}-abc1234def56",
         status="completed",
         start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
         close=datetime(2026, 6, 3, 6, 1, tzinfo=UTC),
         pr_number=pr,
         head_sha="abc1234def56",
         findings=findings,
-        rules=rules,
+        detail=detail,
         comment_url=comment,
     )
 
 
-def test_determinism_tab_has_its_own_treatment_and_empty_state():
-    html = render.page(_model())
-    assert "Determinism review" in html
-    assert "transitive ring" in html
-    assert "No PRs reviewed yet" in html
+def _review(status: str = "running") -> AdvisoryExecution:
+    return _adv_loop(Loop.DETERMINISM_REVIEW, "review", status)
 
 
-def test_determinism_tab_counts_a_live_review_loop():
-    html = render.page(_model(reviews=[_review("running")]))
-    assert "loops live" in html  # the liveness card
-    assert ">1<" in html  # one repo covered / one loop live
-
-
-def test_flagged_review_renders_rule_count_and_comment_link():
-    comment = f"https://github.com/{REPO}/pull/7#issuecomment-1"
-    pr_reviews = [_pr_review(7, 1, ("datetime.datetime.now",), comment=comment)]
-    html = render.page(_model(pr_reviews=pr_reviews))
-    assert "datetime.datetime.now" in html
-    assert "1 hazard" in html
-    assert "#7" in html
-    assert comment in html  # the one-click comment link
-
-
-def test_clean_review_renders_clean_not_a_hazard():
-    html = render.page(_model(pr_reviews=[_pr_review(8, 0, ())]))
-    assert ">clean<" in html
-
-
-# ── source-level a11y review tab ─────────────────────────────────────────────
-def _a11y(status: str = "running") -> A11yExecution:
-    return A11yExecution(
-        workflow_id="froot-a11y-mseeks-revisionist",
-        status=status,
-        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
+def _pr_review(
+    pr: int, findings: int, detail: tuple[str, ...], comment: str | None = None
+) -> PrAdvisoryExecution:
+    return _pr_adv(
+        Loop.DETERMINISM_REVIEW, "review", pr, findings, detail, comment
     )
 
 
 def _pr_a11y(
-    pr: int,
-    findings: int,
-    kinds: tuple[str, ...],
-    comment: str | None = None,
-) -> PrA11yExecution:
-    return PrA11yExecution(
-        workflow_id=f"froot-pr-a11y-mseeks-revisionist-{pr}-abc1234def56",
-        status="completed",
-        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
-        close=datetime(2026, 6, 3, 6, 1, tzinfo=UTC),
-        pr_number=pr,
-        head_sha="abc1234def56",
-        findings=findings,
-        kinds=kinds,
-        comment_url=comment,
-    )
+    pr: int, findings: int, detail: tuple[str, ...], comment: str | None = None
+) -> PrAdvisoryExecution:
+    return _pr_adv(Loop.A11Y_REVIEW, "a11y", pr, findings, detail, comment)
 
 
-def test_a11y_tab_has_its_own_treatment_and_empty_state():
+def test_advisory_tabs_are_registry_driven_one_per_emit_signal_loop():
+    # Both advisory loops surface as their own tab, titled from the registered
+    # spec — the dashboard derives the *set* of advisory tabs from the
+    # registry, never a hard-coded determinism+a11y pair.
     html = render.page(_model())
-    assert "A11y review" in html
-    assert "source-level gaps" in html
+    assert "Determinism review" in html  # determinism-review's panel_title
+    assert "A11y review" in html  # a11y-review's panel_title
     assert "No PRs reviewed yet" in html
 
 
-def test_a11y_tab_counts_a_live_loop():
-    html = render.page(_model(a11y_reviews=[_a11y("running")]))
-    assert "A11y loop" in html  # the per-tab cadence line
+def test_advisory_tab_presentation_is_spec_driven_not_hardcoded() -> None:
+    # The cut-#2 milestone for the advisory family: a tab's icon flows from its
+    # spec, so changing the spec's icon changes the rendered tab with NO
+    # renderer edit (mirroring the acting family's spec-driven tabs).
+    from dataclasses import replace
+
+    from froot.dashboard.render import _ICONS
+    from froot.loops import registry
+
+    original = registry.get(Loop.A11Y_REVIEW)
+    assert original.dashboard_icon == "accessibility"
+    try:
+        registry.register(replace(original, dashboard_icon="layers"))
+        html = render.page(_model())
+        assert _ICONS["layers"] in html  # the spec's new icon is rendered
+    finally:
+        registry.register(original)  # restore for the other tests
+
+
+def test_advisory_tab_counts_a_live_loop():
+    html = render.page(_model(advisory=[_review("running")]))
     assert "loops live" in html  # the liveness card
+    assert ">1<" in html  # one repo covered / one loop live
 
 
-def test_flagged_a11y_renders_gap_count_and_comment_link():
-    comment = f"https://github.com/{REPO}/pull/7#issuecomment-9"
-    pr_a11y = [_pr_a11y(7, 1, ("missing-alt",), comment=comment)]
-    html = render.page(_model(pr_a11y_reviews=pr_a11y))
-    assert "missing-alt" in html
-    assert "1 gap" in html
+def test_flagged_advisory_renders_finding_count_and_comment_link():
+    comment = f"https://github.com/{REPO}/pull/7#issuecomment-1"
+    pr_advisory = [
+        _pr_review(7, 1, ("datetime.datetime.now",), comment=comment)
+    ]
+    html = render.page(_model(pr_advisory=pr_advisory))
+    assert "datetime.datetime.now" in html  # the kind, in the detail column
+    assert "1 finding" in html
     assert "#7" in html
     assert comment in html  # the one-click comment link
 
 
-def test_clean_a11y_renders_clean_not_a_gap():
-    html = render.page(_model(pr_a11y_reviews=[_pr_a11y(8, 0, ())]))
+def test_clean_advisory_renders_clean_not_a_finding():
+    html = render.page(_model(pr_advisory=[_pr_review(8, 0, ())]))
     assert ">clean<" in html
+
+
+def test_a11y_loop_does_not_cross_attribute_to_determinism():
+    # The two advisory loops share one renderer but a per-PR a11y review must
+    # land on the a11y tab with its own gap kind, not the determinism tab.
+    html = render.page(_model(pr_advisory=[_pr_a11y(7, 1, ("missing-alt",))]))
+    assert "missing-alt" in html  # only the a11y loop surfaces this kind
+    assert "1 finding" in html
 
 
 # ── the gate: per-class standing + queue badge ───────────────────────────────
@@ -394,10 +390,12 @@ def _model_p(
         repos=(REPO,),
         policy=policy,
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
-        temporal=(((), tuple(bumps), (), (), (), ()), None),
+        temporal=(((), tuple(bumps), (), ()), None),
         telemetry=telemetry,
         outcomes=outcomes,
     )
@@ -434,10 +432,12 @@ def test_hero_says_no_classes_when_no_repos_configured():
         now=NOW,
         repos=(),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=((), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=(
             RunTelemetry(
                 available=False,
@@ -503,10 +503,12 @@ def _model_outcomes(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
-        review_interval_seconds=300,
-        a11y_interval_seconds=300,
+        advisory_intervals={
+            Loop.DETERMINISM_REVIEW: 300,
+            Loop.A11Y_REVIEW: 300,
+        },
         github=(tuple(prs), None),
-        temporal=(((), (), (), (), (), ()), None),
+        temporal=(((), (), (), ()), None),
         telemetry=telemetry,
         outcomes=outcomes,
         reliability_window_days=90,

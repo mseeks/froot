@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final
 from temporalio.client import WorkflowExecutionStatus
 
 from froot.domain.base import Frozen
+from froot.domain.loop import Loop
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -31,6 +32,14 @@ if TYPE_CHECKING:
 _MAX_PER_TYPE: Final = 500
 # The owner/name slug out of a PR url — the repo-aware join key (see fetch).
 _PR_URL: Final = re.compile(r"github\.com/([^/]+/[^/]+)/pull/\d+")
+# The bespoke per-advisory-loop runtime the source reads: which workflow types
+# carry each loop's heartbeat and per-PR reviews, and the result key naming each
+# finding's kind. A new advisory loop adds one row (its workflows stay its own);
+# everything downstream of here is generic.
+_ADVISORY_SOURCES: Final = (
+    (Loop.DETERMINISM_REVIEW, "ReviewWorkflow", "PrReviewWorkflow", "rule"),
+    (Loop.A11Y_REVIEW, "A11yReviewWorkflow", "PrA11yReviewWorkflow", "kind"),
+)
 
 
 class ScanExecution(Frozen):
@@ -60,22 +69,29 @@ class BumpExecution(Frozen):
     reason: str | None
 
 
-class ReviewExecution(Frozen):
-    """One determinism-review-loop execution (several per id across CAN)."""
+class AdvisoryExecution(Frozen):
+    """One advisory-loop execution (several per id across CAN).
 
+    ``loop`` tags which advisory loop (``determinism-review`` /
+    ``a11y-review``) this heartbeat belongs to, so the read-model partitions
+    the one stream back into per-loop tabs.
+    """
+
+    loop: str
     workflow_id: str
     status: str
     start: datetime | None
 
 
-class PrReviewExecution(Frozen):
-    """One per-PR determinism review, with its result (if completed).
+class PrAdvisoryExecution(Frozen):
+    """One per-PR advisory review, with its result (if completed).
 
-    The findings count + flagged rules + advisory comment come from the
-    ``PrReviewWorkflow`` result; the repo is recovered by the read-model from
-    the deterministic workflow id (it encodes the slug).
+    The finding count + distinct finding kinds + advisory comment come from the
+    per-PR workflow result; the repo is recovered by the read-model from the
+    deterministic workflow id (it encodes the slug). ``loop`` tags the family.
     """
 
+    loop: str
     workflow_id: str
     status: str
     start: datetime | None
@@ -83,34 +99,7 @@ class PrReviewExecution(Frozen):
     pr_number: int | None
     head_sha: str | None
     findings: int
-    rules: tuple[str, ...]
-    comment_url: str | None
-
-
-class A11yExecution(Frozen):
-    """One a11y-review-loop execution (several per id across CAN)."""
-
-    workflow_id: str
-    status: str
-    start: datetime | None
-
-
-class PrA11yExecution(Frozen):
-    """One per-PR a11y review, with its result (if completed).
-
-    The finding count + flagged kinds + advisory comment come from the
-    ``PrA11yReviewWorkflow`` result; the repo is recovered by the read-model
-    from the deterministic workflow id (it encodes the slug).
-    """
-
-    workflow_id: str
-    status: str
-    start: datetime | None
-    close: datetime | None
-    pr_number: int | None
-    head_sha: str | None
-    findings: int
-    kinds: tuple[str, ...]
+    detail: tuple[str, ...]
     comment_url: str | None
 
 
@@ -210,22 +199,27 @@ async def _reason(client: Client, execution: WorkflowExecution) -> str | None:
         return None
 
 
-class _ReviewOutcome(Frozen):
-    """The bits of a completed review's result the read-model joins on."""
+class _AdvisoryOutcome(Frozen):
+    """The completed-review bits the read-model joins on (any advisory loop)."""
 
     pr_number: int | None
     head_sha: str | None
     findings: int
-    rules: tuple[str, ...]
+    detail: tuple[str, ...]
     comment_url: str | None
 
 
-async def _review_outcome(
-    client: Client, execution: WorkflowExecution
-) -> _ReviewOutcome:
-    """A completed review's result (pr/head/findings/rules/comment)."""
-    empty = _ReviewOutcome(
-        pr_number=None, head_sha=None, findings=0, rules=(), comment_url=None
+async def _advisory_outcome(
+    client: Client, execution: WorkflowExecution, detail_key: str
+) -> _AdvisoryOutcome:
+    """A completed review's result (pr/head/findings/detail/comment).
+
+    ``detail_key`` names the field on each finding carrying its kind — the
+    banned call (``rule``) for determinism, the gap kind (``kind``) for a11y —
+    so one reader serves every advisory loop.
+    """
+    empty = _AdvisoryOutcome(
+        pr_number=None, head_sha=None, findings=0, detail=(), comment_url=None
     )
     try:
         handle = client.get_workflow_handle(
@@ -238,64 +232,19 @@ async def _review_outcome(
         return empty
     raw = data.get("findings")
     findings = raw if isinstance(raw, list) else []
-    rules = tuple(
-        str(f["rule"])
+    detail = tuple(
+        str(f[detail_key])
         for f in findings
-        if isinstance(f, dict) and isinstance(f.get("rule"), str)
+        if isinstance(f, dict) and isinstance(f.get(detail_key), str)
     )
     number = data.get("pr_number")
     head = data.get("head_sha")
     comment = data.get("comment_url")
-    return _ReviewOutcome(
+    return _AdvisoryOutcome(
         pr_number=number if isinstance(number, int) else None,
         head_sha=head if isinstance(head, str) else None,
         findings=len(findings),
-        rules=rules,
-        comment_url=comment if isinstance(comment, str) else None,
-    )
-
-
-class _A11yOutcome(Frozen):
-    """The bits of a completed a11y review's result the read-model joins on."""
-
-    pr_number: int | None
-    head_sha: str | None
-    findings: int
-    kinds: tuple[str, ...]
-    comment_url: str | None
-
-
-async def _a11y_outcome(
-    client: Client, execution: WorkflowExecution
-) -> _A11yOutcome:
-    """A completed a11y review's result (pr/head/findings/kinds/comment)."""
-    empty = _A11yOutcome(
-        pr_number=None, head_sha=None, findings=0, kinds=(), comment_url=None
-    )
-    try:
-        handle = client.get_workflow_handle(
-            execution.id, run_id=execution.run_id
-        )
-        data = _as_dict(await handle.result())
-    except Exception:  # best-effort enrichment — a bad decode is never fatal
-        return empty
-    if data is None:
-        return empty
-    raw = data.get("findings")
-    findings = raw if isinstance(raw, list) else []
-    kinds = tuple(
-        str(f["kind"])
-        for f in findings
-        if isinstance(f, dict) and isinstance(f.get("kind"), str)
-    )
-    number = data.get("pr_number")
-    head = data.get("head_sha")
-    comment = data.get("comment_url")
-    return _A11yOutcome(
-        pr_number=number if isinstance(number, int) else None,
-        head_sha=head if isinstance(head, str) else None,
-        findings=len(findings),
-        kinds=kinds,
+        detail=detail,
         comment_url=comment if isinstance(comment, str) else None,
     )
 
@@ -303,10 +252,8 @@ async def _a11y_outcome(
 type _Ledger = tuple[
     tuple[ScanExecution, ...],
     tuple[BumpExecution, ...],
-    tuple[ReviewExecution, ...],
-    tuple[PrReviewExecution, ...],
-    tuple[A11yExecution, ...],
-    tuple[PrA11yExecution, ...],
+    tuple[AdvisoryExecution, ...],
+    tuple[PrAdvisoryExecution, ...],
 ]
 
 
@@ -314,19 +261,15 @@ async def fetch(client: Client) -> tuple[_Ledger, str | None]:
     """Read froot's scan/bump + review executions (degrades to an error)."""
     scans: list[ScanExecution] = []
     bumps: list[BumpExecution] = []
-    reviews: list[ReviewExecution] = []
-    pr_reviews: list[PrReviewExecution] = []
-    a11y_reviews: list[A11yExecution] = []
-    pr_a11y_reviews: list[PrA11yExecution] = []
+    advisory: list[AdvisoryExecution] = []
+    pr_advisory: list[PrAdvisoryExecution] = []
 
     def ledger() -> _Ledger:
         return (
             tuple(scans),
             tuple(bumps),
-            tuple(reviews),
-            tuple(pr_reviews),
-            tuple(a11y_reviews),
-            tuple(pr_a11y_reviews),
+            tuple(advisory),
+            tuple(pr_advisory),
         )
 
     try:
@@ -366,76 +309,46 @@ async def fetch(client: Client) -> tuple[_Ledger, str | None]:
                     reason=reason,
                 )
             )
-        async for execution in _take(
-            client.list_workflows("WorkflowType = 'ReviewWorkflow'")
-        ):
-            reviews.append(
-                ReviewExecution(
-                    workflow_id=execution.id,
-                    status=_status(execution),
-                    start=execution.start_time,
+        for loop, repo_type, pr_type, detail_key in _ADVISORY_SOURCES:
+            async for execution in _take(
+                client.list_workflows(f"WorkflowType = '{repo_type}'")
+            ):
+                advisory.append(
+                    AdvisoryExecution(
+                        loop=loop,
+                        workflow_id=execution.id,
+                        status=_status(execution),
+                        start=execution.start_time,
+                    )
                 )
-            )
-        async for execution in _take(
-            client.list_workflows("WorkflowType = 'PrReviewWorkflow'")
-        ):
-            review = _ReviewOutcome(
-                pr_number=None,
-                head_sha=None,
-                findings=0,
-                rules=(),
-                comment_url=None,
-            )
-            if execution.status is WorkflowExecutionStatus.COMPLETED:
-                review = await _review_outcome(client, execution)
-            pr_reviews.append(
-                PrReviewExecution(
-                    workflow_id=execution.id,
-                    status=_status(execution),
-                    start=execution.start_time,
-                    close=execution.close_time,
-                    pr_number=review.pr_number,
-                    head_sha=review.head_sha,
-                    findings=review.findings,
-                    rules=review.rules,
-                    comment_url=review.comment_url,
+            async for execution in _take(
+                client.list_workflows(f"WorkflowType = '{pr_type}'")
+            ):
+                review = _AdvisoryOutcome(
+                    pr_number=None,
+                    head_sha=None,
+                    findings=0,
+                    detail=(),
+                    comment_url=None,
                 )
-            )
-        async for execution in _take(
-            client.list_workflows("WorkflowType = 'A11yReviewWorkflow'")
-        ):
-            a11y_reviews.append(
-                A11yExecution(
-                    workflow_id=execution.id,
-                    status=_status(execution),
-                    start=execution.start_time,
+                if execution.status is WorkflowExecutionStatus.COMPLETED:
+                    review = await _advisory_outcome(
+                        client, execution, detail_key
+                    )
+                pr_advisory.append(
+                    PrAdvisoryExecution(
+                        loop=loop,
+                        workflow_id=execution.id,
+                        status=_status(execution),
+                        start=execution.start_time,
+                        close=execution.close_time,
+                        pr_number=review.pr_number,
+                        head_sha=review.head_sha,
+                        findings=review.findings,
+                        detail=review.detail,
+                        comment_url=review.comment_url,
+                    )
                 )
-            )
-        async for execution in _take(
-            client.list_workflows("WorkflowType = 'PrA11yReviewWorkflow'")
-        ):
-            a11y = _A11yOutcome(
-                pr_number=None,
-                head_sha=None,
-                findings=0,
-                kinds=(),
-                comment_url=None,
-            )
-            if execution.status is WorkflowExecutionStatus.COMPLETED:
-                a11y = await _a11y_outcome(client, execution)
-            pr_a11y_reviews.append(
-                PrA11yExecution(
-                    workflow_id=execution.id,
-                    status=_status(execution),
-                    start=execution.start_time,
-                    close=execution.close_time,
-                    pr_number=a11y.pr_number,
-                    head_sha=a11y.head_sha,
-                    findings=a11y.findings,
-                    kinds=a11y.kinds,
-                    comment_url=a11y.comment_url,
-                )
-            )
     except Exception as exc:  # degrade to an error string, never crash the page
         return ledger(), f"{type(exc).__name__}: {exc}"
     return ledger(), None

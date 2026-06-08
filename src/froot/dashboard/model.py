@@ -323,8 +323,12 @@ class Judgment(Frozen):
     flagged_but_passed: int
 
 
-class ReviewLoop(Frozen):
-    """Liveness of one repo's determinism-review loop (the transitive ring).
+class AdvisoryLoop(Frozen):
+    """Liveness of one repo's advisory loop (the emit-signal family).
+
+    The advisory family (determinism-review, a11y-review) scans open PRs and
+    leaves one decaying comment; this is the per-repo loop's heartbeat, the
+    same shape every advisory loop reports.
 
     Attributes:
         repo: The ``owner/name`` slug this loop reviews.
@@ -341,16 +345,18 @@ class ReviewLoop(Frozen):
     last_tick: datetime | None
 
 
-class ReviewRow(Frozen):
-    """One per-PR determinism review, from its ``PrReviewWorkflow`` result.
+class AdvisoryRow(Frozen):
+    """One per-PR advisory review, from its per-PR workflow's result.
 
     Attributes:
         repo: The ``owner/name`` slug the PR belongs to.
         pr_number: The reviewed PR number, if known.
         pr_url: The PR's web URL, if it can be formed.
         head_sha: The head commit the review ran against.
-        findings: How many transitive hazards the review surfaced.
-        rules: The distinct banned calls flagged (``datetime.datetime.now``…).
+        findings: How many findings the review surfaced.
+        detail: The distinct finding kinds flagged — banned calls for the
+            determinism loop (``datetime.datetime.now``…), gap kinds for a11y
+            (``missing-alt``…).
         comment_url: The advisory comment's URL, if one was posted.
         status: The review workflow status (``completed`` / ``running`` / ...).
         reviewed_at: When the review closed, or started if still running.
@@ -361,94 +367,56 @@ class ReviewRow(Frozen):
     pr_url: str | None
     head_sha: str | None
     findings: int
-    rules: tuple[str, ...]
+    detail: tuple[str, ...]
     comment_url: str | None
     status: str
     reviewed_at: datetime | None
 
 
-class ReviewRecord(Frozen):
-    """The determinism reviewer's headline, derived from completed reviews.
-
-    The hazard-resolved rate (was a flagged hazard gone on a later commit?) is
-    a later addition — it needs accumulated cross-commit history, so it is not
-    here yet.
+class AdvisoryRecord(Frozen):
+    """One advisory loop's headline, derived from its completed reviews.
 
     Attributes:
         reviewed: Completed per-PR reviews in the recent window.
-        flagged: Reviews that surfaced at least one hazard.
+        flagged: Reviews that surfaced at least one finding.
         clean: Reviews that surfaced none.
-        hazards: Total hazards surfaced across all reviews.
-        repos_covered: Distinct repos with a live review loop.
+        findings: Total findings surfaced across all reviews.
+        repos_covered: Distinct repos with a live loop.
     """
 
     reviewed: int
     flagged: int
     clean: int
-    hazards: int
-    repos_covered: int
-
-
-class A11yLoop(Frozen):
-    """Liveness of one repo's source-level a11y-review loop.
-
-    Attributes:
-        repo: The ``owner/name`` slug this loop reviews.
-        status: The a11y workflow status (``running`` /
-            ``continued_as_new`` / ``terminated`` / ...), lowercased.
-        live: True when the loop is actively self-scheduling.
-        last_tick: When the current a11y execution started (≈ the last tick),
-            or ``None`` if no a11y workflow exists for the repo.
-    """
-
-    repo: str
-    status: str
-    live: bool
-    last_tick: datetime | None
-
-
-class A11yRow(Frozen):
-    """One per-PR a11y review, from its ``PrA11yReviewWorkflow`` result.
-
-    Attributes:
-        repo: The ``owner/name`` slug the PR belongs to.
-        pr_number: The reviewed PR number, if known.
-        pr_url: The PR's web URL, if it can be formed.
-        head_sha: The head commit the review ran against.
-        findings: How many source-level a11y gaps the review surfaced.
-        kinds: The distinct gap kinds flagged (``missing-alt``…).
-        comment_url: The advisory comment's URL, if one was posted.
-        status: The review workflow status (``completed`` / ``running`` / ...).
-        reviewed_at: When the review closed, or started if still running.
-    """
-
-    repo: str
-    pr_number: int | None
-    pr_url: str | None
-    head_sha: str | None
     findings: int
-    kinds: tuple[str, ...]
-    comment_url: str | None
-    status: str
-    reviewed_at: datetime | None
+    repos_covered: int
 
 
-class A11yRecord(Frozen):
-    """The a11y reviewer's headline, derived from completed reviews.
+class AdvisoryView(Frozen):
+    """One advisory loop's complete tab — the same treatment for every loop.
+
+    The acting family's :class:`LoopView`, mirrored for the emit-signal family.
+    The presentation (icon, title) is the loop's registered spec, derived once
+    in the read-model, so a new advisory loop's tab appears with no renderer
+    change. Built by partitioning the advisory executions by loop and running
+    the same aggregates for each.
 
     Attributes:
-        reviewed: Completed per-PR a11y reviews in the recent window.
-        flagged: Reviews that surfaced at least one gap.
-        clean: Reviews that surfaced none.
-        issues: Total a11y gaps surfaced across all reviews.
-        repos_covered: Distinct repos with a live a11y loop.
+        loop: The loop key (``determinism-review`` / ``a11y-review``).
+        icon: The tab's icon key, from the loop's registered spec.
+        title: The tab/panel title, from the loop's registered spec.
+        interval_seconds: This loop's poll cadence (telemetry-in-context).
+        loops: Liveness of this loop's per-repo review schedules.
+        record: This loop's headline over completed reviews.
+        rows: This loop's per-PR reviews, newest first.
     """
 
-    reviewed: int
-    flagged: int
-    clean: int
-    issues: int
-    repos_covered: int
+    loop: str
+    icon: str
+    title: str
+    interval_seconds: int
+    loops: tuple[AdvisoryLoop, ...]
+    record: AdvisoryRecord
+    rows: tuple[AdvisoryRow, ...]
 
 
 class LoopView(Frozen):
@@ -511,14 +479,10 @@ class DashboardModel(Frozen):
         gate: Open PRs awaiting a human, the freshest last.
         bumps: Every proposed bump, newest first (the detail behind the stats).
         failures: Bump loops that did not close.
-        review_interval_seconds: The configured gap between review poll ticks.
-        review_loops: Liveness of each Temporal repo's determinism-review loop.
-        review_record: The determinism reviewer's headline.
-        reviews: Every per-PR determinism review, newest first.
-        a11y_interval_seconds: The configured gap between a11y poll ticks.
-        a11y_loops: Liveness of each Temporal repo's source-level a11y loop.
-        a11y_record: The a11y reviewer's headline.
-        a11y_reviews: Every per-PR a11y review, newest first.
+        advisory: One self-contained view per advisory loop — the emit-signal
+            tabs (determinism-review, a11y-review), each with its own
+            heartbeat, headline, and per-PR reviews. Derived from the registry,
+            so a new advisory loop is one more view here.
         telemetry: Trace-derived run telemetry (best-effort).
         bump_loops: One self-contained view per bump loop — the per-loop tabs.
             The top-level bump aggregates above are the combined ("all loops")
@@ -539,13 +503,6 @@ class DashboardModel(Frozen):
     gate: tuple[BumpRow, ...]
     bumps: tuple[BumpRow, ...]
     failures: tuple[Failure, ...]
-    review_interval_seconds: int
-    review_loops: tuple[ReviewLoop, ...]
-    review_record: ReviewRecord
-    reviews: tuple[ReviewRow, ...]
-    a11y_interval_seconds: int
-    a11y_loops: tuple[A11yLoop, ...]
-    a11y_record: A11yRecord
-    a11y_reviews: tuple[A11yRow, ...]
+    advisory: tuple[AdvisoryView, ...]
     telemetry: RunTelemetry
     bump_loops: tuple[LoopView, ...] = ()

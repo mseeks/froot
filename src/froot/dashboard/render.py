@@ -21,12 +21,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from froot.dashboard.model import (
-        A11yRow,
+        AdvisoryRow,
+        AdvisoryView,
         BumpRow,
         ClassGate,
         DashboardModel,
         LoopView,
-        ReviewRow,
         RunTelemetry,
     )
 
@@ -356,10 +356,11 @@ def _short_id(workflow_id: str) -> str:
 # ── header ───────────────────────────────────────────────────────────────────
 def _alive(model: DashboardModel) -> tuple[str, str]:
     """Global liveness dot + label across every loop."""
+    advisory_loops = [loop for v in model.advisory for loop in v.loops]
     live = sum(1 for x in model.scan_loops if x.live) + sum(
-        1 for x in model.review_loops if x.live
+        1 for x in advisory_loops if x.live
     )
-    total = len(model.scan_loops) + len(model.review_loops)
+    total = len(model.scan_loops) + len(advisory_loops)
     if total == 0:
         return "mute", "no loops configured"
     kind = "ok" if live == total else ("warn" if live else "bad")
@@ -686,142 +687,71 @@ def _queue_badge(row: BumpRow) -> str:
     return f'<span class="mut">held &middot; {escape(reason)}</span>'
 
 
-def _review_panel(model: DashboardModel, pid: str) -> str:
-    r = model.review_record
-    live = sum(1 for x in model.review_loops if x.live)
-    haz = "bad" if r.hazards else ""
+def _advisory_panel(view: AdvisoryView, pid: str) -> str:
+    """One advisory loop's tab, presentation (icon, title) from its spec."""
+    r = view.record
+    live = sum(1 for x in view.loops if x.live)
+    flag = "bad" if r.findings else ""
     cards = (
         '<div class="cards">'
         f"{_card(r.repos_covered, 'repos covered')}"
-        f"{_card(f'{live}/{len(model.review_loops)}', 'loops live')}"
+        f"{_card(f'{live}/{len(view.loops)}', 'loops live')}"
         f"{_card(r.reviewed, 'reviewed', f'{r.flagged} flagged')}"
-        f"{_card(r.hazards, 'hazards', 'transitive', haz)}"
+        f"{_card(r.findings, 'findings', 'advisory', flag)}"
         "</div>"
     )
     body = (
         '<div class="empty">No PRs reviewed yet.</div>'
-        if not model.reviews
-        else _reviews_table(model.reviews)
+        if not view.rows
+        else _advisory_table(view.rows)
     )
     note = (
-        '<p class="caption">The transitive ring — advisory. It '
-        "re-derives each open PR's reachable determinism hazards and "
-        "comments; it never blocks a merge.</p>"
+        '<p class="caption">An advisory loop. froot re-derives each open '
+        "PR's findings every tick and upserts one decaying comment, never "
+        "blocking a merge.</p>"
     )
-    every = round(model.review_interval_seconds / 60, 1)
+    every = round(view.interval_seconds / 60, 1)
     cad = (
         f'<p class="cad">Review loop &middot; <b>{live}</b> live &middot; '
         f"every <b>{every}m</b></p>"
     )
     return (
         f'<section class="panel" id="{pid}">'
-        f'<div class="heroh">{_icon("search")}'
-        "Determinism review &middot; the transitive ring"
-        f"</div>{note}{cards}{cad}"
+        f'<div class="heroh">{_icon(view.icon)}{escape(view.title)}</div>'
+        f"{note}{cards}{cad}"
         f'<div class="sec"><div class="sech">Reviews '
-        f'<span class="n">{len(model.reviews)}</span></div>{body}</div>'
+        f'<span class="n">{len(view.rows)}</span></div>{body}</div>'
         "</section>"
     )
 
 
-def _reviews_table(reviews: tuple[ReviewRow, ...]) -> str:
-    rows = "".join(
+def _advisory_table(rows: tuple[AdvisoryRow, ...]) -> str:
+    body = "".join(
         "<tr>"
         f'<td class="mono">{escape(row.repo)}</td>'
-        f"<td>{_review_pr_link(row)}</td>"
-        f"<td>{_findings_cell(row)}</td>"
-        f'<td class="mono mut">{escape(", ".join(row.rules) or "—")}</td>'
+        f"<td>{_advisory_pr_link(row)}</td>"
+        f"<td>{_advisory_findings_cell(row)}</td>"
+        f'<td class="mono mut">{escape(", ".join(row.detail) or "—")}</td>'
         "</tr>"
-        for row in reviews
+        for row in rows
     )
     return (
         '<table class="data"><thead><tr><th>repo</th><th>pr</th>'
-        "<th>findings</th><th>rules</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        "<th>findings</th><th>details</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
     )
 
 
-def _review_pr_link(row: ReviewRow) -> str:
+def _advisory_pr_link(row: AdvisoryRow) -> str:
     if row.pr_url is None or row.pr_number is None:
         return '<span class="mut">—</span>'
     return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
 
 
-def _findings_cell(row: ReviewRow) -> str:
+def _advisory_findings_cell(row: AdvisoryRow) -> str:
     if row.findings == 0:
         return '<span class="ok">clean</span>'
-    label = "hazard" if row.findings == 1 else "hazards"
-    link = ""
-    if row.comment_url:
-        link = f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
-    return f'<span class="bad">{row.findings} {label}</span>{link}'
-
-
-def _a11y_panel(model: DashboardModel, pid: str) -> str:
-    r = model.a11y_record
-    live = sum(1 for x in model.a11y_loops if x.live)
-    iss = "bad" if r.issues else ""
-    cards = (
-        '<div class="cards">'
-        f"{_card(r.repos_covered, 'repos covered')}"
-        f"{_card(f'{live}/{len(model.a11y_loops)}', 'loops live')}"
-        f"{_card(r.reviewed, 'reviewed', f'{r.flagged} flagged')}"
-        f"{_card(r.issues, 'gaps', 'source-level', iss)}"
-        "</div>"
-    )
-    body = (
-        '<div class="empty">No PRs reviewed yet.</div>'
-        if not model.a11y_reviews
-        else _a11y_table(model.a11y_reviews)
-    )
-    note = (
-        '<p class="caption">Source-level a11y — advisory. It re-derives each '
-        "open PR's changed Vue/JSX templates for accessibility gaps and "
-        "comments; it never blocks a merge.</p>"
-    )
-    every = round(model.a11y_interval_seconds / 60, 1)
-    cad = (
-        f'<p class="cad">A11y loop &middot; <b>{live}</b> live &middot; '
-        f"every <b>{every}m</b></p>"
-    )
-    return (
-        f'<section class="panel" id="{pid}">'
-        f'<div class="heroh">{_icon("accessibility")}'
-        "A11y review &middot; source-level gaps"
-        f"</div>{note}{cards}{cad}"
-        f'<div class="sec"><div class="sech">Reviews '
-        f'<span class="n">{len(model.a11y_reviews)}</span></div>{body}</div>'
-        "</section>"
-    )
-
-
-def _a11y_table(reviews: tuple[A11yRow, ...]) -> str:
-    rows = "".join(
-        "<tr>"
-        f'<td class="mono">{escape(row.repo)}</td>'
-        f"<td>{_a11y_pr_link(row)}</td>"
-        f"<td>{_a11y_findings_cell(row)}</td>"
-        f'<td class="mono mut">{escape(", ".join(row.kinds) or "—")}</td>'
-        "</tr>"
-        for row in reviews
-    )
-    return (
-        '<table class="data"><thead><tr><th>repo</th><th>pr</th>'
-        "<th>findings</th><th>kinds</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-    )
-
-
-def _a11y_pr_link(row: A11yRow) -> str:
-    if row.pr_url is None or row.pr_number is None:
-        return '<span class="mut">—</span>'
-    return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
-
-
-def _a11y_findings_cell(row: A11yRow) -> str:
-    if row.findings == 0:
-        return '<span class="ok">clean</span>'
-    label = "gap" if row.findings == 1 else "gaps"
+    label = "finding" if row.findings == 1 else "findings"
     link = ""
     if row.comment_url:
         link = f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
@@ -901,26 +831,18 @@ def page(model: DashboardModel) -> str:
                 _loop_panel(view, pid, now),
             )
         )
-    tabs.append(
-        (
-            "tab-det",
-            "panel-det",
-            "search",
-            "Determinism review",
-            str(model.review_record.reviewed),
-            _review_panel(model, "panel-det"),
+    for j, advisory in enumerate(model.advisory):
+        pid, tid = f"panel-adv-{j}", f"tab-adv-{j}"
+        tabs.append(
+            (
+                tid,
+                pid,
+                advisory.icon,
+                advisory.title,
+                str(advisory.record.reviewed),
+                _advisory_panel(advisory, pid),
+            )
         )
-    )
-    tabs.append(
-        (
-            "tab-a11y",
-            "panel-a11y",
-            "accessibility",
-            "A11y review",
-            str(model.a11y_record.reviewed),
-            _a11y_panel(model, "panel-a11y"),
-        )
-    )
     tabs.append(
         (
             "tab-tel",

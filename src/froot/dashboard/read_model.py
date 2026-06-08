@@ -14,9 +14,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from froot.dashboard.model import (
-    A11yLoop,
-    A11yRecord,
-    A11yRow,
+    AdvisoryLoop,
+    AdvisoryRecord,
+    AdvisoryRow,
+    AdvisoryView,
     BumpRow,
     ClassGate,
     DashboardModel,
@@ -25,9 +26,6 @@ from froot.dashboard.model import (
     LoopView,
     Probes,
     Reliability,
-    ReviewLoop,
-    ReviewRecord,
-    ReviewRow,
     RunTelemetry,
     ScanLoop,
     SourceHealth,
@@ -51,11 +49,9 @@ if TYPE_CHECKING:
 
     from froot.dashboard.github_source import GithubPr
     from froot.dashboard.temporal_source import (
-        A11yExecution,
+        AdvisoryExecution,
         BumpExecution,
-        PrA11yExecution,
-        PrReviewExecution,
-        ReviewExecution,
+        PrAdvisoryExecution,
         ScanExecution,
     )
 
@@ -580,56 +576,75 @@ def _bump_loops(
     return tuple(views)
 
 
-def _review_id(repo: str) -> str | None:
-    """The deterministic review-loop id for an ``owner/name`` slug, if valid."""
+# Which per-repo-loop-id namer each advisory loop uses. The naming is bespoke
+# (the loops' workflows are still their own), so the join keeps a tiny dispatch;
+# the per-PR prefix is then a uniform transform of the loop id (below).
+_ADVISORY_LOOP_ID = {
+    Loop.DETERMINISM_REVIEW: review_workflow_id,
+    Loop.A11Y_REVIEW: a11y_review_workflow_id,
+}
+
+
+def _advisory_loop_id(loop: Loop, repo: str) -> str | None:
+    """The deterministic per-repo loop id for ``repo``, if valid and known."""
+    namer = _ADVISORY_LOOP_ID.get(loop)
+    if namer is None:
+        return None
     match RepoRef.parse(repo):
         case Ok(ref):
-            return review_workflow_id(TargetRepo(repo=ref))
+            return namer(TargetRepo(repo=ref))
         case _:
             return None
 
 
-def _pr_review_prefix(repo: str) -> str | None:
-    """The id prefix every per-PR review of ``repo`` shares (the join key)."""
-    review_id = _review_id(repo)
-    if review_id is None:
+def _pr_advisory_prefix(loop: Loop, repo: str) -> str | None:
+    """The id prefix every per-PR review of ``(loop, repo)`` shares (join key).
+
+    Each per-PR id is the loop id with ``froot-`` widened to ``froot-pr-``, then
+    the ``-<pr>-<sha>`` tail; the shared prefix is that, sans tail.
+    """
+    loop_id = _advisory_loop_id(loop, repo)
+    if loop_id is None:
         return None
-    # froot-review-<slug> -> froot-pr-review-<slug>- ; the pr/sha tail follows.
-    return "froot-pr-review-" + review_id.removeprefix("froot-review-") + "-"
+    return "froot-pr-" + loop_id.removeprefix("froot-") + "-"
 
 
-def _attribute_repo(workflow_id: str, repos: tuple[str, ...]) -> str | None:
+def _attribute_advisory_repo(
+    loop: Loop, workflow_id: str, repos: tuple[str, ...]
+) -> str | None:
     """The configured repo a per-PR-review id belongs to (longest prefix)."""
     best: str | None = None
     best_len = -1
     for repo in repos:
-        prefix = _pr_review_prefix(repo)
+        prefix = _pr_advisory_prefix(loop, repo)
         if prefix and workflow_id.startswith(prefix) and len(prefix) > best_len:
             best, best_len = repo, len(prefix)
     return best
 
 
-def _review_loops(
-    repos: tuple[str, ...], reviews: tuple[ReviewExecution, ...]
-) -> tuple[ReviewLoop, ...]:
-    """One liveness row per repo that actually has a review loop.
+def _advisory_loops(
+    loop: Loop, repos: tuple[str, ...], execs: tuple[AdvisoryExecution, ...]
+) -> tuple[AdvisoryLoop, ...]:
+    """One liveness row per repo that actually runs this advisory loop.
 
-    Reviews are scoped to the Temporal repos, so a configured npm repo with no
-    review loop is omitted rather than shown as a dead one.
+    Executions are scoped to the Temporal repos, so a configured repo with no
+    such loop is omitted rather than shown as a dead one.
     """
-    by_id: dict[str, ReviewExecution] = {}
-    for review in reviews:
-        current = by_id.get(review.workflow_id)
-        if current is None or _newer(review.start, current.start):
-            by_id[review.workflow_id] = review
-    loops: list[ReviewLoop] = []
+    by_id: dict[str, AdvisoryExecution] = {}
+    for candidate in execs:
+        if candidate.loop != loop:
+            continue
+        current = by_id.get(candidate.workflow_id)
+        if current is None or _newer(candidate.start, current.start):
+            by_id[candidate.workflow_id] = candidate
+    loops: list[AdvisoryLoop] = []
     for repo in repos:
-        review_id = _review_id(repo)
-        execution = by_id.get(review_id) if review_id is not None else None
+        loop_id = _advisory_loop_id(loop, repo)
+        execution = by_id.get(loop_id) if loop_id is not None else None
         if execution is None:
             continue
         loops.append(
-            ReviewLoop(
+            AdvisoryLoop(
                 repo=repo,
                 status=execution.status,
                 live=execution.status in _LIVE_STATUSES,
@@ -639,26 +654,30 @@ def _review_loops(
     return tuple(loops)
 
 
-def _review_rows(
-    pr_reviews: tuple[PrReviewExecution, ...], repos: tuple[str, ...]
-) -> tuple[ReviewRow, ...]:
-    """Project each per-PR review into a row, newest review first."""
-    rows: list[ReviewRow] = []
-    for execution in pr_reviews:
-        repo = _attribute_repo(execution.workflow_id, repos)
+def _advisory_rows(
+    loop: Loop,
+    pr_execs: tuple[PrAdvisoryExecution, ...],
+    repos: tuple[str, ...],
+) -> tuple[AdvisoryRow, ...]:
+    """Project each per-PR review of this loop into a row, newest first."""
+    rows: list[AdvisoryRow] = []
+    for execution in pr_execs:
+        if execution.loop != loop:
+            continue
+        repo = _attribute_advisory_repo(loop, execution.workflow_id, repos)
         pr_url = (
             f"https://github.com/{repo}/pull/{execution.pr_number}"
             if repo is not None and execution.pr_number is not None
             else None
         )
         rows.append(
-            ReviewRow(
+            AdvisoryRow(
                 repo=repo or "?",
                 pr_number=execution.pr_number,
                 pr_url=pr_url,
                 head_sha=execution.head_sha,
                 findings=execution.findings,
-                rules=execution.rules,
+                detail=execution.detail,
                 comment_url=execution.comment_url,
                 status=execution.status,
                 reviewed_at=execution.close or execution.start,
@@ -671,129 +690,54 @@ def _review_rows(
     return tuple(rows)
 
 
-def _review_record(
-    loops: tuple[ReviewLoop, ...], rows: tuple[ReviewRow, ...]
-) -> ReviewRecord:
-    """Counts over the completed reviews (resolved-rate is a later loop)."""
+def _advisory_record(
+    loops: tuple[AdvisoryLoop, ...], rows: tuple[AdvisoryRow, ...]
+) -> AdvisoryRecord:
+    """Counts over this loop's completed reviews."""
     completed = [r for r in rows if r.status == "completed"]
     flagged = sum(1 for r in completed if r.findings > 0)
-    hazards = sum(r.findings for r in completed)
-    return ReviewRecord(
+    findings = sum(r.findings for r in completed)
+    return AdvisoryRecord(
         reviewed=len(completed),
         flagged=flagged,
         clean=len(completed) - flagged,
-        hazards=hazards,
+        findings=findings,
         repos_covered=len(loops),
     )
 
 
-def _a11y_id(repo: str) -> str | None:
-    """The deterministic a11y-loop id for an ``owner/name`` slug, if valid."""
-    match RepoRef.parse(repo):
-        case Ok(ref):
-            return a11y_review_workflow_id(TargetRepo(repo=ref))
-        case _:
-            return None
+def _advisory_views(
+    repos: tuple[str, ...],
+    execs: tuple[AdvisoryExecution, ...],
+    pr_execs: tuple[PrAdvisoryExecution, ...],
+    intervals: dict[Loop, int],
+) -> tuple[AdvisoryView, ...]:
+    """One tab per registered advisory loop, presentation from the registry.
 
-
-def _pr_a11y_prefix(repo: str) -> str | None:
-    """The id prefix every per-PR a11y review of ``repo`` shares (join key)."""
-    a11y_id = _a11y_id(repo)
-    if a11y_id is None:
-        return None
-    # froot-a11y-<slug> -> froot-pr-a11y-<slug>- ; the pr/sha tail follows.
-    return "froot-pr-a11y-" + a11y_id.removeprefix("froot-a11y-") + "-"
-
-
-def _attribute_a11y_repo(
-    workflow_id: str, repos: tuple[str, ...]
-) -> str | None:
-    """The configured repo a per-PR-a11y id belongs to (longest prefix)."""
-    best: str | None = None
-    best_len = -1
-    for repo in repos:
-        prefix = _pr_a11y_prefix(repo)
-        if prefix and workflow_id.startswith(prefix) and len(prefix) > best_len:
-            best, best_len = repo, len(prefix)
-    return best
-
-
-def _a11y_loops(
-    repos: tuple[str, ...], a11y_reviews: tuple[A11yExecution, ...]
-) -> tuple[A11yLoop, ...]:
-    """One liveness row per repo that actually has an a11y loop.
-
-    Scoped to the Temporal repos, so a configured repo with no a11y loop is
-    omitted rather than shown as a dead one.
+    The emit-signal specs drive both which tabs exist and how each is labelled
+    (icon, title), so registering an advisory loop is all it takes to surface
+    its tab — nothing here changes.
     """
-    by_id: dict[str, A11yExecution] = {}
-    for review in a11y_reviews:
-        current = by_id.get(review.workflow_id)
-        if current is None or _newer(review.start, current.start):
-            by_id[review.workflow_id] = review
-    loops: list[A11yLoop] = []
-    for repo in repos:
-        a11y_id = _a11y_id(repo)
-        execution = by_id.get(a11y_id) if a11y_id is not None else None
-        if execution is None:
+    views: list[AdvisoryView] = []
+    for spec in registry.all_specs():
+        tail = spec.tail
+        if not isinstance(tail, registry.AdvisoryTail):
             continue
-        loops.append(
-            A11yLoop(
-                repo=repo,
-                status=execution.status,
-                live=execution.status in _LIVE_STATUSES,
-                last_tick=execution.start,
+        loop = spec.loop
+        loops = _advisory_loops(loop, repos, execs)
+        rows = _advisory_rows(loop, pr_execs, repos)
+        views.append(
+            AdvisoryView(
+                loop=loop,
+                icon=spec.dashboard_icon,
+                title=tail.panel_title,
+                interval_seconds=intervals.get(loop, 0),
+                loops=loops,
+                record=_advisory_record(loops, rows),
+                rows=rows,
             )
         )
-    return tuple(loops)
-
-
-def _a11y_rows(
-    pr_a11y_reviews: tuple[PrA11yExecution, ...], repos: tuple[str, ...]
-) -> tuple[A11yRow, ...]:
-    """Project each per-PR a11y review into a row, newest review first."""
-    rows: list[A11yRow] = []
-    for execution in pr_a11y_reviews:
-        repo = _attribute_a11y_repo(execution.workflow_id, repos)
-        pr_url = (
-            f"https://github.com/{repo}/pull/{execution.pr_number}"
-            if repo is not None and execution.pr_number is not None
-            else None
-        )
-        rows.append(
-            A11yRow(
-                repo=repo or "?",
-                pr_number=execution.pr_number,
-                pr_url=pr_url,
-                head_sha=execution.head_sha,
-                findings=execution.findings,
-                kinds=execution.kinds,
-                comment_url=execution.comment_url,
-                status=execution.status,
-                reviewed_at=execution.close or execution.start,
-            )
-        )
-    rows.sort(
-        key=lambda r: r.reviewed_at.timestamp() if r.reviewed_at else 0.0,
-        reverse=True,
-    )
-    return tuple(rows)
-
-
-def _a11y_record(
-    loops: tuple[A11yLoop, ...], rows: tuple[A11yRow, ...]
-) -> A11yRecord:
-    """Counts over the completed a11y reviews."""
-    completed = [r for r in rows if r.status == "completed"]
-    flagged = sum(1 for r in completed if r.findings > 0)
-    issues = sum(r.findings for r in completed)
-    return A11yRecord(
-        reviewed=len(completed),
-        flagged=flagged,
-        clean=len(completed) - flagged,
-        issues=issues,
-        repos_covered=len(loops),
-    )
+    return tuple(views)
 
 
 def _sources(
@@ -837,17 +781,14 @@ def assemble(
     loops: tuple[Loop, ...] = (Loop.DEPENDENCY_PATCH,),
     policy: AutonomyPolicy = _DEFAULT_POLICY,
     scan_interval_seconds: int,
-    review_interval_seconds: int,
-    a11y_interval_seconds: int,
+    advisory_intervals: dict[Loop, int] | None = None,
     github: tuple[tuple[GithubPr, ...], str | None],
     temporal: tuple[
         tuple[
             tuple[ScanExecution, ...],
             tuple[BumpExecution, ...],
-            tuple[ReviewExecution, ...],
-            tuple[PrReviewExecution, ...],
-            tuple[A11yExecution, ...],
-            tuple[PrA11yExecution, ...],
+            tuple[AdvisoryExecution, ...],
+            tuple[PrAdvisoryExecution, ...],
         ],
         str | None,
     ],
@@ -863,14 +804,7 @@ def assemble(
     """
     prs, github_error = github
     (
-        (
-            scans,
-            bumps,
-            reviews,
-            pr_reviews,
-            a11y_reviews,
-            pr_a11y_reviews,
-        ),
+        (scans, bumps, advisory, pr_advisory),
         temporal_error,
     ) = temporal
     run_telemetry, clickhouse_error = telemetry
@@ -896,10 +830,9 @@ def assemble(
         scan_interval_seconds,
         reliability_window_days,
     )
-    review_loops = _review_loops(repos, reviews)
-    review_rows = _review_rows(pr_reviews, repos)
-    a11y_loops = _a11y_loops(repos, a11y_reviews)
-    a11y_rows = _a11y_rows(pr_a11y_reviews, repos)
+    advisory_views = _advisory_views(
+        repos, advisory, pr_advisory, advisory_intervals or {}
+    )
     return DashboardModel(
         generated_at=now,
         repos_configured=repos,
@@ -908,12 +841,7 @@ def assemble(
             github_error,
             len(prs),
             temporal_error,
-            len(scans)
-            + len(bumps)
-            + len(reviews)
-            + len(pr_reviews)
-            + len(a11y_reviews)
-            + len(pr_a11y_reviews),
+            len(scans) + len(bumps) + len(advisory) + len(pr_advisory),
             run_telemetry,
             clickhouse_error,
         ),
@@ -927,14 +855,7 @@ def assemble(
         gate=_gate(rows, class_gates, policy),
         bumps=rows,
         failures=all_failures,
-        review_interval_seconds=review_interval_seconds,
-        review_loops=review_loops,
-        review_record=_review_record(review_loops, review_rows),
-        reviews=review_rows,
-        a11y_interval_seconds=a11y_interval_seconds,
-        a11y_loops=a11y_loops,
-        a11y_record=_a11y_record(a11y_loops, a11y_rows),
-        a11y_reviews=a11y_rows,
+        advisory=advisory_views,
         telemetry=run_telemetry,
         bump_loops=bump_loops,
     )
