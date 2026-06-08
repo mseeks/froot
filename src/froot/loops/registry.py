@@ -9,9 +9,9 @@ loop-agnostic and stays in the spine.
 
 A loop's *disposition* declares how its work item terminates — COMMIT_OR_REVERT
 (propose a PR; the spine gates the merge) or EMIT_SIGNAL (upsert a decaying
-advisory; no merge, no gate). The commit machinery keys on that field. This cut
-registers the three acting (COMMIT_OR_REVERT) loops; the advisory loops fold in
-behind the same field later.
+advisory; no merge, no gate). The commit-vs-emit fork will read that field when
+advisory loops fold in; this cut registers the three acting (COMMIT_OR_REVERT)
+loops, so nothing branches on it yet.
 
 Loops self-register at import. The registry is populated lazily on first read
 (see :func:`_ensure`) so importing a consumer never forces a particular import
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 
 class Disposition(StrEnum):
-    """How a loop's work item terminates (the gate machinery keys on it)."""
+    """How a loop's work item terminates (the commit-vs-emit fork)."""
 
     # Propose a PR; the spine gates the merge (the acting loops).
     COMMIT_OR_REVERT = "commit-or-revert"
@@ -57,12 +57,12 @@ class LoopSpec:
 
     Attributes:
         loop: The loop this spec specialises (the registry key).
-        disposition: How its work item terminates (commit vs emit-signal).
+        disposition: How its work item terminates (commit vs emit-signal). The
+            commit-vs-emit fork will read this when advisory loops fold in;
+            today every acting loop is ``COMMIT_OR_REVERT``.
         observe: The signal→candidate seam — the one genuinely per-loop body.
-        id_segment: The workflow-id/branch namespace segment. Empty for
-            ``dependency-patch`` (legacy-compat: its ids predate a second loop
-            and must stay byte-for-byte so a running loop is never orphaned);
-            every loop added after carries its name as a segment.
+        title_prefix: The PR-title verb (``deps`` / ``security`` /
+            ``dead-code``) — a per-loop label, not derivable from the loop name.
         judge_context: The framing line for the in-loop changelog judge, or
             ``None`` when the loop does no changelog judging (e.g. dead-code,
             whose judgment is a safe-to-remove veto *at the signal*, inside
@@ -74,12 +74,16 @@ class LoopSpec:
         dashboard_icon: The icon key for this loop's dashboard tab (one of the
             renderer's ``_ICONS``). Carried here so a new loop's tab is fully
             presented from its spec — no per-loop arm in the renderer.
+
+    The workflow-id/branch namespace segment is NOT carried here: it is a pure
+    derivation in :mod:`froot.policy.naming` (empty for ``dependency-patch``,
+    the loop name otherwise) that is already zero-edit for a new loop.
     """
 
     loop: Loop
     disposition: Disposition
     observe: ObserveFn
-    id_segment: tuple[str, ...]
+    title_prefix: str
     judge_context: str | None = None
     reconciles: bool = True
     dashboard_icon: str = "package"

@@ -43,8 +43,7 @@ register(
         loop=Loop.DEPENDENCY_PATCH,
         disposition=Disposition.COMMIT_OR_REVERT,
         observe=observe,
-        # Legacy-compat: dependency-patch ids carry no segment (the first loop).
-        id_segment=(),
+        title_prefix="deps",
         judge_context=_JUDGE_CONTEXT,
     )
 )

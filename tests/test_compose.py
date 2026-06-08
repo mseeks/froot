@@ -28,7 +28,11 @@ def test_security_draft_uses_security_namespace_and_justification():
         justification="Clears GHSA-xxxx (CVE-1).",
     )
     draft = pull_request_draft(
-        repo, candidate, CleanVerdict(rationale="ok"), Loop.SECURITY_PATCH
+        repo,
+        candidate,
+        CleanVerdict(rationale="ok"),
+        Loop.SECURITY_PATCH,
+        title_prefix="security",
     )
     assert draft.title == "security: bump left-pad to 1.3.0"
     assert draft.branch.value == "froot/security-patch/left-pad-1.3.0"
@@ -42,7 +46,9 @@ def test_removal_draft_names_the_unused_dependency():
         dev=True,
         justification="unused (knip); not imported",
     )
-    draft = removal_pull_request_draft(repo, removal, Loop.DEPENDENCY_PATCH)
+    draft = removal_pull_request_draft(
+        repo, removal, Loop.DEPENDENCY_PATCH, title_prefix="deps"
+    )
     assert draft.title == "deps: remove left-pad (unused)"
     assert draft.base == "main"
     assert draft.branch == branch_name(removal, Loop.DEPENDENCY_PATCH)
@@ -71,7 +77,9 @@ def test_pull_request_draft_clean():
     candidate = make_candidate(
         package="left-pad", current="1.4.2", target="1.4.3"
     )
-    draft = pull_request_draft(repo, candidate, CleanVerdict(rationale="fixes"))
+    draft = pull_request_draft(
+        repo, candidate, CleanVerdict(rationale="fixes"), title_prefix="deps"
+    )
     assert draft.title == "deps: bump left-pad to 1.4.3"
     assert draft.base == "main"
     assert draft.branch == branch_name(candidate)
@@ -88,7 +96,9 @@ def test_pull_request_draft_uv_describes_lockfile_only():
     candidate = make_candidate(
         package="idna", current="3.6.0", target="3.6.1", ecosystem=Ecosystem.UV
     )
-    draft = pull_request_draft(repo, candidate, CleanVerdict(rationale="ok"))
+    draft = pull_request_draft(
+        repo, candidate, CleanVerdict(rationale="ok"), title_prefix="deps"
+    )
     assert "uv.lock only" in draft.body
     assert "pyproject.toml unchanged" in draft.body
     assert "pyproject.toml + lockfile" not in draft.body
@@ -101,6 +111,7 @@ def test_pull_request_draft_risky_renders_concerns():
         RiskyVerdict(
             rationale="careful", concerns=("regex change", "deprecated")
         ),
+        title_prefix="deps",
     )
     assert "- regex change" in draft.body
     assert "- deprecated" in draft.body
@@ -108,7 +119,10 @@ def test_pull_request_draft_risky_renders_concerns():
 
 def test_pull_request_draft_unknown():
     draft = pull_request_draft(
-        make_repo(), make_candidate(), UnknownVerdict(rationale="no notes")
+        make_repo(),
+        make_candidate(),
+        UnknownVerdict(rationale="no notes"),
+        title_prefix="deps",
     )
     assert "no notes" in draft.body
 

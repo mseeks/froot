@@ -52,7 +52,7 @@ register(
         loop=Loop.SECURITY_PATCH,
         disposition=Disposition.COMMIT_OR_REVERT,
         observe=observe,
-        id_segment=(Loop.SECURITY_PATCH.value,),
+        title_prefix="security",
         judge_context=_JUDGE_CONTEXT,
         dashboard_icon="shield",
     )

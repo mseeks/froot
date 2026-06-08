@@ -91,15 +91,28 @@ def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
 
 
 def _draft_for(params: OpenPrInput) -> PullRequestDraft:
-    """Build the PR draft for the work item — bump vs removal compose."""
+    """Build the PR draft for the work item — bump vs removal compose.
+
+    The PR-title verb is the loop's, resolved from its registered spec here (the
+    impure boundary) and passed into the pure draft builders.
+    """
+    from froot.loops import registry
+
     item = params.candidate
+    title_prefix = registry.get(params.loop).title_prefix
     match item:
         case Candidate():
             return pull_request_draft(
-                params.target, item, params.verdict, params.loop
+                params.target,
+                item,
+                params.verdict,
+                params.loop,
+                title_prefix=title_prefix,
             )
         case Removal():
-            return removal_pull_request_draft(params.target, item, params.loop)
+            return removal_pull_request_draft(
+                params.target, item, params.loop, title_prefix=title_prefix
+            )
     assert_never(item)
 
 
@@ -124,8 +137,8 @@ async def _select_candidates(
     scan can make its selectivity legible (how much was seen versus kept).
 
     The one genuinely per-loop body now lives in each loop's spec ``observe``
-    (see :mod:`froot.loops`); the spine looks the loop up and runs it, so a new
-    loop is one registered spec, not a new arm here.
+    (see :mod:`froot.loops`); the spine looks the loop up and runs it, so this
+    selection seam needs no per-loop arm.
     """
     from froot.loops import registry
 

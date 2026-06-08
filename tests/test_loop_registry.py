@@ -1,11 +1,10 @@
 """The loop registry — the spine reads it instead of branching on the enum.
 
-These guard the per-loop seams the registry now owns: the disposition (which
-the gate machinery keys on), the workflow-id namespace segment (which must agree
-with ``naming.py``, the spine's own deterministic derivation), and the
-changelog-judge framing — so a loop's identity stays single-sourced as loops
-multiply. Behavior equivalence of each loop's ``observe`` is covered by the
-existing scan tests, which now route through the registry.
+These guard the per-loop seams the registry owns: the disposition, the
+changelog-judge framing, the reconcile trait, the PR-title verb, and the
+dashboard icon — so a loop's identity stays single-sourced as loops multiply.
+Behavior equivalence of each loop's ``observe`` is covered by the existing scan
+tests, which now route through the registry.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from froot.adapters.model_judge import _loop_context
 from froot.domain.loop import Loop
 from froot.loops import registry
 from froot.loops.registry import Disposition
-from froot.policy.naming import _loop_id_segment
 
 _ACTING = (Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH, Loop.DEAD_CODE)
 
@@ -25,17 +23,12 @@ def test_acting_loops_registered_as_commit_or_revert() -> None:
         assert specs[loop].disposition is Disposition.COMMIT_OR_REVERT
 
 
-def test_id_segment_agrees_with_naming() -> None:
-    # The spine's deterministic ids (naming.py) and the registered spec must
-    # never drift — the segment is the loop's namespace, single-sourced.
-    for loop in _ACTING:
-        assert registry.get(loop).id_segment == _loop_id_segment(loop)
-
-
-def test_dependency_patch_keeps_the_empty_legacy_segment() -> None:
-    # The first loop's ids predate a second loop; an empty segment keeps them
-    # byte-for-byte so a running loop is never orphaned.
-    assert registry.get(Loop.DEPENDENCY_PATCH).id_segment == ()
+def test_title_prefix_is_the_per_loop_pr_verb() -> None:
+    # The PR-title verb is a per-loop label single-sourced in the spec (not
+    # derivable from the loop name), so a new loop carries its own.
+    assert registry.get(Loop.DEPENDENCY_PATCH).title_prefix == "deps"
+    assert registry.get(Loop.SECURITY_PATCH).title_prefix == "security"
+    assert registry.get(Loop.DEAD_CODE).title_prefix == "dead-code"
 
 
 def test_judge_context_present_for_changelog_loops_absent_for_dead_code() -> (

@@ -74,7 +74,7 @@ register(
         loop=Loop.DEAD_CODE,
         disposition=Disposition.COMMIT_OR_REVERT,
         observe=observe,
-        id_segment=(Loop.DEAD_CODE.value,),
+        title_prefix="dead-code",
         # Dead-code judges at the signal (the veto above), not the changelog.
         judge_context=None,
         # A removal carries no version to be overtaken — nothing to reconcile.
