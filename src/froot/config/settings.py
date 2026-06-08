@@ -280,6 +280,41 @@ class ReviewSettings(BaseSettings):
         return value
 
 
+class A11yReviewSettings(BaseSettings):
+    """The source-level a11y-reviewer loop (``FROOT_A11Y_*``).
+
+    A per-repo loop that polls open PRs and leaves an advisory comment when a
+    changed Vue/JSX template has a source-level accessibility gap (an unnamed
+    ``role="img"``/``<svg>``, an unlabeled control, a click on a non-interactive
+    element with no keyboard path, an ``<img>`` with no alt). Advisory only — it
+    never merges; it is the source-level complement to the runtime axe checks an
+    app's e2e suite runs.
+
+    Off by default: a new loop opts in deliberately (MHE's observe-then-act
+    staging), and it only matters for UI repos — a repo with no templates yields
+    nothing, so enabling it cluster-wide is harmless.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_A11Y_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    enabled: bool = False
+    # Advisory, so a little latency is fine — it never races a merge.
+    poll_interval_seconds: int = Field(default=300, gt=0)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_is_off(cls, value: object) -> object:
+        """Treat a blank value as the default (off), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+
 class BehaviorSettings(BaseSettings):
     """Loop-hygiene toggles (``FROOT_*``), both defaulting on.
 

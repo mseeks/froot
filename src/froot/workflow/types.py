@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
+from froot.domain.a11y import A11yCandidate, A11yFinding
 from froot.domain.base import Frozen
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.determinism import FrontierItem, ReviewFinding
@@ -236,3 +237,53 @@ class PostReviewInput(Frozen):
     target: TargetRepo
     pr: PullRequestRef
     findings: tuple[ReviewFinding, ...]
+
+
+class A11yReviewScanParams(Frozen):
+    """Input to the self-scheduling a11y-review loop (per repo)."""
+
+    target: TargetRepo
+    interval_seconds: int = Field(
+        default=_DEFAULT_REVIEW_INTERVAL_SECONDS, gt=0
+    )
+    continuous: bool = False
+
+
+class A11yReviewScanResult(Frozen):
+    """The result of one a11y-review-scan tick.
+
+    Attributes:
+        reviewed: Open PRs seen this tick.
+        dispatched: PR a11y reviews handed off (idempotent per PR + head SHA).
+    """
+
+    reviewed: int
+    dispatched: int
+
+
+class PrA11yReviewParams(Frozen):
+    """Input to a single PR's a11y review (also the scan activity's input)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class DispatchA11yInput(Frozen):
+    """Input to the dispatch-pr-a11y-review activity (start a PR review)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class AdjudicateA11yInput(Frozen):
+    """Input to the a11y-adjudication activity (the model pass)."""
+
+    candidates: tuple[A11yCandidate, ...]
+
+
+class PostA11yInput(Frozen):
+    """Input to the post-a11y-review activity (upsert the advisory comment)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+    findings: tuple[A11yFinding, ...]

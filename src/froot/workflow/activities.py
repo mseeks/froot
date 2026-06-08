@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, assert_never
 
 from temporalio import activity
 
+from froot.domain.a11y import A11yAnalysis, A11yVerdict
 from froot.domain.candidate import Candidate
 from froot.domain.changelog import (
     ChangelogVerdict,
@@ -31,6 +32,12 @@ from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
 from froot.domain.repo import TargetRepo
 from froot.domain.work import WorkItem
+from froot.policy.a11y_comment import (
+    A11Y_MARKER,
+    render_a11y_comment,
+    should_post,
+)
+from froot.policy.a11y_scan import scan_sources
 from froot.policy.compose import (
     pr_labels,
     pull_request_draft,
@@ -40,14 +47,17 @@ from froot.policy.determinism import analyze_workflow_surface
 from froot.policy.naming import (
     branch_name,
     bump_workflow_id,
+    pr_a11y_review_workflow_id,
     pr_review_workflow_id,
 )
 from froot.policy.review_comment import REVIEW_MARKER, render_review_comment
 from froot.workflow.types import (
+    AdjudicateA11yInput,
     AdjudicateInput,
     AutoMergeInput,
     CiCheckInput,
     CloseInput,
+    DispatchA11yInput,
     DispatchInput,
     DispatchReviewInput,
     GateReviewInput,
@@ -55,7 +65,9 @@ from froot.workflow.types import (
     JudgeInput,
     MergeInput,
     OpenPrInput,
+    PostA11yInput,
     PostReviewInput,
+    PrA11yReviewParams,
     PrReviewParams,
     ReconcileInput,
     RecordInput,
@@ -67,6 +79,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
+_a11y_log = logging.getLogger("froot.a11y")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
 _gate_log = logging.getLogger("froot.gate")
@@ -759,3 +772,108 @@ async def post_review(params: PostReviewInput) -> str | None:
         )
     )
     return url
+
+
+# ── The a11y reviewer (the source-level design-system ring) ──────────────────
+@activity.defn
+async def scan_pr_a11y(params: PrA11yReviewParams) -> A11yAnalysis:
+    """Check out the PR head and scan its changed templates for a11y risks.
+
+    Scoped to the PR's changed Vue/JSX templates (shift-left: review what came
+    in), so the advisory stays bounded and high-signal. The source lines are
+    read into memory in the activity, so the pure scan is unaffected by the
+    workspace being cleaned up.
+    """
+    from froot.adapters.github import GitHubForge
+    from froot.adapters.web_source import load_web_sources
+
+    forge = GitHubForge()
+    changed = await forge.list_pull_request_files(
+        params.target, params.pr.number
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        await forge.checkout_pull_request(
+            params.target, workspace, params.pr.number
+        )
+        sources = load_web_sources(workspace, changed)
+        candidates = scan_sources(sources)
+    return A11yAnalysis(candidates=candidates, scanned_files=len(sources))
+
+
+@activity.defn
+async def adjudicate_a11y(
+    params: AdjudicateA11yInput,
+) -> tuple[A11yVerdict, ...]:
+    """Run the model over each flagged candidate; return aligned verdicts."""
+    from froot.adapters.a11y_judge import A11ySourceJudge
+
+    judge = A11ySourceJudge()
+    verdicts: list[A11yVerdict] = []
+    for candidate in params.candidates:
+        verdicts.append(await judge.adjudicate(candidate))
+    return tuple(verdicts)
+
+
+@activity.defn
+async def post_a11y_review(params: PostA11yInput) -> str | None:
+    """Upsert (or clear) the advisory comment; log the ledger row.
+
+    Posts when there are findings, or when a prior comment must be cleared to
+    "all clear" (true decay — a PR whose gaps were fixed never keeps a stale
+    finding list, the bug the determinism reviewer leaves). A clean PR with
+    no prior comment stays silent, so a clean PR is never spammed.
+    """
+    from froot.adapters.github import GitHubForge
+
+    forge = GitHubForge()
+    exists = await forge.find_marked_comment(
+        params.target, params.pr.number, A11Y_MARKER
+    )
+    url: str | None = None
+    if should_post(has_findings=bool(params.findings), comment_exists=exists):
+        body = render_a11y_comment(params.findings, params.pr.head_sha)
+        url = await forge.upsert_issue_comment(
+            params.target, params.pr.number, A11Y_MARKER, body
+        )
+    _a11y_log.info(
+        json.dumps(
+            {
+                "event": "loop_outcome",
+                "loop": "a11y-review",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "head_sha": params.pr.head_sha,
+                "findings": len(params.findings),
+                "kinds": sorted({f.kind for f in params.findings}),
+                "comment_url": url,
+            }
+        )
+    )
+    return url
+
+
+@activity.defn
+async def dispatch_pr_a11y_review(params: DispatchA11yInput) -> None:
+    """Start a PR's a11y review (idempotent per PR + head SHA)."""
+    from temporalio.common import WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from froot.workflow.pr_a11y_review_workflow import PrA11yReviewWorkflow
+    from froot.workflow.temporal_client import client, task_queue
+
+    temporal = await client()
+    try:
+        await temporal.start_workflow(
+            PrA11yReviewWorkflow.run,
+            PrA11yReviewParams(target=params.target, pr=params.pr),
+            id=pr_a11y_review_workflow_id(
+                params.target, params.pr.number, params.pr.head_sha
+            ),
+            task_queue=task_queue(),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        # This (PR, head SHA) already has an a11y review — a no-op, so
+        # re-polling never double-reviews the same commit.
+        return

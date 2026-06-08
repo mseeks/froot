@@ -365,6 +365,43 @@ class GitHubForge:
                     refs.extend(_pull_request_ref(p) for p in payload)
         return tuple(refs)
 
+    async def list_pull_request_files(
+        self, target: TargetRepo, number: int
+    ) -> tuple[str, ...]:
+        """List a PR's changed file paths (added/modified/renamed, at head).
+
+        Scopes the a11y review to what the PR actually touches. Removed files
+        are dropped — they have no content at the head to scan. Paginated so a
+        large PR is read whole (a truncated read would silently skip files).
+        """
+        names: list[str] = []
+        async with _client() as client:
+            async for page in _iter_pages(
+                client, f"/repos/{target.repo.slug}/pulls/{number}/files"
+            ):
+                for entry in page.json():
+                    if (
+                        isinstance(entry, dict)
+                        and entry.get("status") != "removed"
+                    ):
+                        names.append(str(entry["filename"]))
+        return tuple(names)
+
+    async def find_marked_comment(
+        self, target: TargetRepo, number: int, marker: str
+    ) -> bool:
+        """Whether froot's ``marker``-tagged comment already exists on a PR.
+
+        Lets an advisory loop decide whether to clear a now-stale comment when a
+        tick has no findings (true decay), without posting on a clean PR that
+        never had one.
+        """
+        async with _client() as client:
+            existing = await _marked_comment_id(
+                client, target.repo.slug, number, marker
+            )
+        return existing is not None
+
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft
     ) -> PullRequestRef:

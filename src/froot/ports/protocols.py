@@ -162,6 +162,16 @@ class Forge(Protocol):
         """List the repo's open PRs (the determinism reviewer's work feed)."""
         ...
 
+    async def list_pull_request_files(
+        self, target: TargetRepo, number: int
+    ) -> tuple[str, ...]:
+        """List a PR's changed file paths (added/modified/renamed, at head).
+
+        Scopes a per-PR review to what the PR actually touches; removed files
+        are omitted (no content at the head to read).
+        """
+        ...
+
     async def upsert_issue_comment(
         self, target: TargetRepo, number: int, marker: str, body: str
     ) -> str:
@@ -169,6 +179,16 @@ class Forge(Protocol):
 
         Finds the existing comment containing ``marker`` and edits it in place,
         else posts a new one — so re-reviewing a PR never stacks comments.
+        """
+        ...
+
+    async def find_marked_comment(
+        self, target: TargetRepo, number: int, marker: str
+    ) -> bool:
+        """Whether froot's ``marker``-tagged comment already exists on a PR.
+
+        Lets an advisory loop clear a now-stale comment when a tick has no
+        findings, without posting on a clean PR that never had one.
         """
         ...
 
