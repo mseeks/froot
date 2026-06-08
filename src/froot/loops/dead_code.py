@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from temporalio import activity
 
 from froot.domain.loop import Loop
-from froot.loops.registry import Disposition, LoopSpec, register
+from froot.loops.registry import CommitTail, LoopSpec, register
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -72,13 +72,14 @@ async def observe(
 register(
     LoopSpec(
         loop=Loop.DEAD_CODE,
-        disposition=Disposition.COMMIT_OR_REVERT,
-        observe=observe,
-        title_prefix="dead-code",
-        # Dead-code judges at the signal (the veto above), not the changelog.
-        judge_context=None,
-        # A removal carries no version to be overtaken — nothing to reconcile.
-        reconciles=False,
         dashboard_icon="scissors",
+        tail=CommitTail(
+            observe=observe,
+            title_prefix="dead-code",
+            # Dead-code judges at the signal (the veto), not the changelog.
+            judge_context=None,
+            # A removal has no version to be overtaken — nothing to reconcile.
+            reconciles=False,
+        ),
     )
 )

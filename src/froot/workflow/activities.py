@@ -105,7 +105,7 @@ def _draft_for(params: OpenPrInput) -> PullRequestDraft:
     from froot.loops import registry
 
     item = params.candidate
-    title_prefix = registry.get(params.loop).title_prefix
+    title_prefix = registry.commit_tail(params.loop).title_prefix
     match item:
         case Candidate():
             return pull_request_draft(
@@ -148,7 +148,7 @@ async def _select_candidates(
     """
     from froot.loops import registry
 
-    return await registry.get(loop).observe(
+    return await registry.commit_tail(loop).observe(
         target, package_manager, manifest_dir
     )
 
@@ -562,7 +562,7 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
     # close when no longer unused — is future work.) The trait is on the spec.
     from froot.loops import registry
 
-    if not registry.get(params.loop).reconciles:
+    if not registry.commit_tail(params.loop).reconciles:
         return 0
 
     target, loop = params.target, params.loop

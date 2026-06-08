@@ -102,7 +102,7 @@ def _loop_context(loop: Loop) -> str:
     """
     from froot.loops import registry
 
-    return registry.get(loop).judge_context or ""
+    return registry.commit_tail(loop).judge_context or ""
 
 
 class _Assessment(BaseModel):
