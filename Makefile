@@ -1,7 +1,7 @@
 # froot — developer terrain.
 # Short, single-purpose targets: each is one tool, easy to read and approve.
 
-.PHONY: sync fmt fmt-check lint type test check worker start-scan start-review start-a11y
+.PHONY: sync fmt fmt-check lint type test check worker start
 
 # Install/refresh the dev env (dev tooling + ai + github + otel + sandbox).
 sync:
@@ -35,15 +35,8 @@ check: fmt-check lint type test
 worker:
 	uv run python -m froot.worker
 
-# Start the durable scan loop for each FROOT_REPOS repo (one-shot).
-start-scan:
-	uv run python -m froot.scan_starter
-
-# Start the durable determinism-review loop for each FROOT_REPOS repo (one-shot).
-start-review:
-	uv run python -m froot.review_starter
-
-# Start the durable a11y-review loop for each FROOT_REPOS repo (one-shot).
-# No-op unless FROOT_A11Y_ENABLED is set (the loop opts in deliberately).
-start-a11y:
-	uv run python -m froot.a11y_review_starter
+# Start every configured loop for each FROOT_REPOS repo (one-shot): the acting
+# loops in FROOT_LOOPS, plus each enabled advisory loop (FROOT_REVIEW_ENABLED /
+# FROOT_A11Y_ENABLED). Re-running is safe — a running loop is left untouched.
+start:
+	uv run python -m froot.starter

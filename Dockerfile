@@ -36,6 +36,6 @@ COPY src ./src
 RUN uv sync --frozen --no-editable \
     --extra ai --extra github --extra otel --extra sandbox
 
-# Default entrypoint: the worker. The scan starter runs as a one-shot via a
-# `command:` override (uv run --no-sync python -m froot.scan_starter).
+# Default entrypoint: the worker. The loop starter runs as a one-shot via a
+# `command:` override (uv run --no-sync python -m froot.starter).
 ENTRYPOINT ["uv", "run", "--no-sync", "python", "-m", "froot.worker"]
