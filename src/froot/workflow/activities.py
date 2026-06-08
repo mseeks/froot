@@ -27,7 +27,6 @@ from froot.domain.changelog import (
 )
 from froot.domain.ci import CIStatus
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
-from froot.domain.loop import Loop
 from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
 from froot.domain.repo import TargetRepo
@@ -75,6 +74,7 @@ from froot.workflow.types import (
 )
 
 if TYPE_CHECKING:
+    from froot.domain.loop import Loop
     from froot.ports.protocols import PackageManager
 
 _log = logging.getLogger("froot.outcome")
@@ -537,11 +537,13 @@ async def reconcile_open_prs(params: ReconcileInput) -> int:
     if not BehaviorSettings().reconcile:
         return 0
     # Reconcile is version-supersession cleanup, which only bump loops have: a
-    # removal carries no version to be overtaken. Skip dead-code rather than
-    # re-run its signal (knip + the veto judge) every tick only to close
-    # nothing. (A removal-specific reconcile — close when no longer unused — is
-    # future work.)
-    if params.loop is Loop.DEAD_CODE:
+    # removal carries no version to be overtaken. A loop that does not reconcile
+    # (dead-code) is skipped rather than re-running its signal (knip + the veto
+    # judge) every tick only to close nothing. (A removal-specific reconcile —
+    # close when no longer unused — is future work.) The trait is on the spec.
+    from froot.loops import registry
+
+    if not registry.get(params.loop).reconciles:
         return 0
 
     target, loop = params.target, params.loop

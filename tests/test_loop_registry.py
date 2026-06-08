@@ -51,3 +51,11 @@ def test_judge_context_present_for_changelog_loops_absent_for_dead_code() -> (
 def test_loop_context_reads_the_registry() -> None:
     for loop in (Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH):
         assert _loop_context(loop) == registry.get(loop).judge_context
+
+
+def test_reconciles_true_for_bump_loops_false_for_dead_code() -> None:
+    # Version-supersession reconcile only applies to version-bearing bumps; a
+    # removal has no version to be overtaken, so dead-code declares it skips.
+    assert registry.get(Loop.DEPENDENCY_PATCH).reconciles is True
+    assert registry.get(Loop.SECURITY_PATCH).reconciles is True
+    assert registry.get(Loop.DEAD_CODE).reconciles is False

@@ -67,6 +67,10 @@ class LoopSpec:
             ``None`` when the loop does no changelog judging (e.g. dead-code,
             whose judgment is a safe-to-remove veto *at the signal*, inside
             ``observe``).
+        reconciles: Whether version-supersession reconcile applies — ``True``
+            for bump loops, ``False`` for a loop whose work item carries no
+            version to be overtaken (dead-code removals). The reconcile activity
+            keys on this instead of naming the loop.
     """
 
     loop: Loop
@@ -74,6 +78,7 @@ class LoopSpec:
     observe: ObserveFn
     id_segment: tuple[str, ...]
     judge_context: str | None = None
+    reconciles: bool = True
 
 
 _LOOPS: dict[Loop, LoopSpec] = {}

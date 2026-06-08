@@ -77,5 +77,7 @@ register(
         id_segment=(Loop.DEAD_CODE.value,),
         # Dead-code judges at the signal (the veto above), not the changelog.
         judge_context=None,
+        # A removal carries no version to be overtaken — nothing to reconcile.
+        reconciles=False,
     )
 )
