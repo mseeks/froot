@@ -168,7 +168,8 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 # --cov-fail-under ratchets coverage: the gate fails if it drops below this.
-# Set a touch under the current total (the entry points worker.py / the starters
-# are deliberately unit-test-free), so it catches real regressions without being
+# Set a touch under the current total (the entry points worker.py / the
+# starter's connect-and-dispatch I/O are deliberately unit-test-free), so it
+# catches real regressions without being
 # brittle. Raise it as coverage climbs.
 addopts = "-v --cov=froot --cov-report=term-missing --cov-fail-under=72"
