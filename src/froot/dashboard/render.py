@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from froot.dashboard.model import (
+        A11yRow,
         BumpRow,
         ClassGate,
         DashboardModel,
@@ -239,6 +240,12 @@ _ICONS = {
         '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/>'
         '<path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/>'
         '<path d="M14.8 14.8 20 20"/>'
+    ),
+    "accessibility": (
+        '<circle cx="16" cy="4" r="1"/><path d="m18 19 1-7-6 1"/>'
+        '<path d="m5 8 3-3 5.5 3-2.36 3.5"/>'
+        '<path d="M4.24 14.5a5 5 0 0 0 6.88 6"/>'
+        '<path d="M13.76 17.5a5 5 0 0 0-6.88-6"/>'
     ),
 }
 
@@ -750,6 +757,77 @@ def _findings_cell(row: ReviewRow) -> str:
     return f'<span class="bad">{row.findings} {label}</span>{link}'
 
 
+def _a11y_panel(model: DashboardModel, pid: str) -> str:
+    r = model.a11y_record
+    live = sum(1 for x in model.a11y_loops if x.live)
+    iss = "bad" if r.issues else ""
+    cards = (
+        '<div class="cards">'
+        f"{_card(r.repos_covered, 'repos covered')}"
+        f"{_card(f'{live}/{len(model.a11y_loops)}', 'loops live')}"
+        f"{_card(r.reviewed, 'reviewed', f'{r.flagged} flagged')}"
+        f"{_card(r.issues, 'gaps', 'source-level', iss)}"
+        "</div>"
+    )
+    body = (
+        '<div class="empty">No PRs reviewed yet.</div>'
+        if not model.a11y_reviews
+        else _a11y_table(model.a11y_reviews)
+    )
+    note = (
+        '<p class="caption">Source-level a11y — advisory. It re-derives each '
+        "open PR's changed Vue/JSX templates for accessibility gaps and "
+        "comments; it never blocks a merge.</p>"
+    )
+    every = round(model.a11y_interval_seconds / 60, 1)
+    cad = (
+        f'<p class="cad">A11y loop &middot; <b>{live}</b> live &middot; '
+        f"every <b>{every}m</b></p>"
+    )
+    return (
+        f'<section class="panel" id="{pid}">'
+        f'<div class="heroh">{_icon("accessibility")}'
+        "A11y review &middot; source-level gaps"
+        f"</div>{note}{cards}{cad}"
+        f'<div class="sec"><div class="sech">Reviews '
+        f'<span class="n">{len(model.a11y_reviews)}</span></div>{body}</div>'
+        "</section>"
+    )
+
+
+def _a11y_table(reviews: tuple[A11yRow, ...]) -> str:
+    rows = "".join(
+        "<tr>"
+        f'<td class="mono">{escape(row.repo)}</td>'
+        f"<td>{_a11y_pr_link(row)}</td>"
+        f"<td>{_a11y_findings_cell(row)}</td>"
+        f'<td class="mono mut">{escape(", ".join(row.kinds) or "—")}</td>'
+        "</tr>"
+        for row in reviews
+    )
+    return (
+        '<table class="data"><thead><tr><th>repo</th><th>pr</th>'
+        "<th>findings</th><th>kinds</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _a11y_pr_link(row: A11yRow) -> str:
+    if row.pr_url is None or row.pr_number is None:
+        return '<span class="mut">—</span>'
+    return f'<a href="{escape(row.pr_url, quote=True)}">#{row.pr_number}</a>'
+
+
+def _a11y_findings_cell(row: A11yRow) -> str:
+    if row.findings == 0:
+        return '<span class="ok">clean</span>'
+    label = "gap" if row.findings == 1 else "gaps"
+    link = ""
+    if row.comment_url:
+        link = f' <a href="{escape(row.comment_url, quote=True)}">comment</a>'
+    return f'<span class="bad">{row.findings} {label}</span>{link}'
+
+
 def _telemetry_panel(model: DashboardModel, pid: str, now: datetime) -> str:
     tel: RunTelemetry = model.telemetry
     if not tel.available:
@@ -833,6 +911,16 @@ def page(model: DashboardModel) -> str:
             "Determinism review",
             str(model.review_record.reviewed),
             _review_panel(model, "panel-det"),
+        )
+    )
+    tabs.append(
+        (
+            "tab-a11y",
+            "panel-a11y",
+            "accessibility",
+            "A11y review",
+            str(model.a11y_record.reviewed),
+            _a11y_panel(model, "panel-a11y"),
         )
     )
     tabs.append(

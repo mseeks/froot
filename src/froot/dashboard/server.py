@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from froot.config.settings import (
+    A11yReviewSettings,
     AutonomySettings,
     DashboardSettings,
     ReviewSettings,
@@ -43,6 +44,7 @@ _MAX_HEAD_BYTES: Final = 64 * 1024
 # Settings' own default, repeated here so a missing FROOT_REPOS still renders.
 _DEFAULT_INTERVAL: Final = 86_400
 _DEFAULT_REVIEW_INTERVAL: Final = 300
+_DEFAULT_A11Y_INTERVAL: Final = 300
 
 
 def _config() -> tuple[tuple[str, ...], tuple[Loop, ...], int]:
@@ -61,6 +63,14 @@ def _review_interval() -> int:
         return ReviewSettings().poll_interval_seconds
     except Exception:  # never let a config read fail the page
         return _DEFAULT_REVIEW_INTERVAL
+
+
+def _a11y_interval() -> int:
+    """The source-level a11y-review poll cadence, degrading to the default."""
+    try:
+        return A11yReviewSettings().poll_interval_seconds
+    except Exception:  # never let a config read fail the page
+        return _DEFAULT_A11Y_INTERVAL
 
 
 def _environment() -> str:
@@ -117,6 +127,7 @@ async def build_html(client: Client) -> str:
         policy=policy,
         scan_interval_seconds=interval,
         review_interval_seconds=_review_interval(),
+        a11y_interval_seconds=_a11y_interval(),
         github=github_result,
         temporal=temporal_result,
         telemetry=telemetry_result,

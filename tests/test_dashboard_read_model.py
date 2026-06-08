@@ -6,7 +6,9 @@ from froot.dashboard import read_model
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import DashboardModel, RunTelemetry
 from froot.dashboard.temporal_source import (
+    A11yExecution,
     BumpExecution,
+    PrA11yExecution,
     PrReviewExecution,
     ReviewExecution,
     ScanExecution,
@@ -89,12 +91,15 @@ def _assemble(
     bumps: list[BumpExecution],
     reviews: list[ReviewExecution] | None = None,
     pr_reviews: list[PrReviewExecution] | None = None,
+    a11y_reviews: list[A11yExecution] | None = None,
+    pr_a11y_reviews: list[PrA11yExecution] | None = None,
 ) -> DashboardModel:
     return read_model.assemble(
         now=NOW,
         repos=(REPO,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
         temporal=(
             (
@@ -102,6 +107,8 @@ def _assemble(
                 tuple(bumps),
                 tuple(reviews or ()),
                 tuple(pr_reviews or ()),
+                tuple(a11y_reviews or ()),
+                tuple(pr_a11y_reviews or ()),
             ),
             None,
         ),
@@ -307,8 +314,9 @@ def test_source_health_reflects_errors():
         repos=(REPO,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((), "boom"),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     health = {s.name: s for s in model.sources}
@@ -396,6 +404,87 @@ def test_review_record_ignores_incomplete_reviews():
     assert model.review_record.flagged == 1
 
 
+# ── Source-level a11y review loop ────────────────────────────────────────────
+def _a11y(status: str = "running") -> A11yExecution:
+    return A11yExecution(
+        workflow_id="froot-a11y-mseeks-revisionist",
+        status=status,
+        start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
+    )
+
+
+def _pr_a11y(
+    pr: int,
+    *,
+    status: str = "completed",
+    findings: int = 0,
+    kinds: tuple[str, ...] = (),
+    head: str = "abc1234def56",
+) -> PrA11yExecution:
+    return PrA11yExecution(
+        workflow_id=f"froot-pr-a11y-mseeks-revisionist-{pr}-{head}",
+        status=status,
+        start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
+        close=datetime(2026, 6, 3, 11, 51, tzinfo=UTC),
+        pr_number=pr,
+        head_sha=head,
+        findings=findings,
+        kinds=kinds,
+        comment_url=None,
+    )
+
+
+def test_a11y_loop_live_when_running():
+    model = _assemble([], [], [], a11y_reviews=[_a11y("running")])
+    assert len(model.a11y_loops) == 1
+    assert model.a11y_loops[0].repo == REPO
+    assert model.a11y_loops[0].live is True
+
+
+def test_a11y_loop_omitted_when_no_execution():
+    # Like the review loop: a11y is scoped to the Temporal repos, so a repo
+    # with no a11y loop is left out, not shown as a dead one.
+    assert _assemble([], [], []).a11y_loops == ()
+
+
+def test_a11y_record_counts_findings_clean_and_issues():
+    pr_a11y = [
+        _pr_a11y(1, findings=2, kinds=("missing-alt", "unlabeled-control")),
+        _pr_a11y(2, findings=0),
+        _pr_a11y(3, findings=1, kinds=("missing-alt",)),
+    ]
+    model = _assemble(
+        [], [], [], a11y_reviews=[_a11y()], pr_a11y_reviews=pr_a11y
+    )
+    r = model.a11y_record
+    assert (r.reviewed, r.flagged, r.clean, r.issues) == (3, 2, 1, 3)
+    assert r.repos_covered == 1
+
+
+def test_a11y_row_attributes_repo_and_pr_url():
+    model = _assemble(
+        [],
+        [],
+        [],
+        pr_a11y_reviews=[_pr_a11y(7, findings=1, kinds=("missing-alt",))],
+    )
+    row = model.a11y_reviews[0]
+    assert row.repo == REPO
+    assert row.pr_url == f"https://github.com/{REPO}/pull/7"
+    assert row.pr_number == 7
+    assert row.kinds == ("missing-alt",)
+
+
+def test_a11y_record_ignores_incomplete_reviews():
+    pr_a11y = [
+        _pr_a11y(1, status="running", findings=0),
+        _pr_a11y(2, status="completed", findings=1, kinds=("missing-alt",)),
+    ]
+    model = _assemble([], [], [], pr_a11y_reviews=pr_a11y)
+    assert model.a11y_record.reviewed == 1  # only the completed one
+    assert model.a11y_record.flagged == 1
+
+
 # ── Earned-autonomy class gates (the shadow gate) ────────────────────────────
 def _allow(**overrides: object) -> AutonomyPolicy:
     base = {
@@ -422,8 +511,9 @@ def _assemble_p(
         policy=policy,
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=(((), tuple(bumps), (), ()), None),
+        temporal=(((), tuple(bumps), (), (), (), ()), None),
         telemetry=_telemetry_off(),
         outcomes=outcomes,
         environment=environment,
@@ -650,8 +740,9 @@ def _assemble_outcomes(
         repos=(REPO,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=_telemetry_off(),
         outcomes=outcomes,
         reliability_window_days=90,
@@ -793,8 +884,9 @@ def test_bump_loops_partition_each_loop_into_its_own_view():
         loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((dep, sec), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}
@@ -819,8 +911,9 @@ def test_dead_code_loop_renders_removal_shape():
         loops=(Loop.DEAD_CODE,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((rm,), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}
@@ -852,8 +945,9 @@ def test_bump_loops_attribute_failures_by_workflow_id():
         loops=(Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((), None),
-        temporal=(((), (dep_fail, sec_fail), (), ()), None),
+        temporal=(((), (dep_fail, sec_fail), (), (), (), ()), None),
         telemetry=_telemetry_off(),
     )
     by_loop = {v.loop: v for v in model.bump_loops}

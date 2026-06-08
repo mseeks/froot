@@ -14,6 +14,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from froot.dashboard.model import (
+    A11yLoop,
+    A11yRecord,
+    A11yRow,
     BumpRow,
     ClassGate,
     DashboardModel,
@@ -35,7 +38,11 @@ from froot.domain.loop import Loop
 from froot.domain.repo import RepoRef, TargetRepo
 from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
 from froot.policy.canary import is_canary, score_probe
-from froot.policy.naming import review_workflow_id, scan_workflow_id
+from froot.policy.naming import (
+    a11y_review_workflow_id,
+    review_workflow_id,
+    scan_workflow_id,
+)
 from froot.result import Ok
 
 if TYPE_CHECKING:
@@ -43,7 +50,9 @@ if TYPE_CHECKING:
 
     from froot.dashboard.github_source import GithubPr
     from froot.dashboard.temporal_source import (
+        A11yExecution,
         BumpExecution,
+        PrA11yExecution,
         PrReviewExecution,
         ReviewExecution,
         ScanExecution,
@@ -676,6 +685,115 @@ def _review_record(
     )
 
 
+def _a11y_id(repo: str) -> str | None:
+    """The deterministic a11y-loop id for an ``owner/name`` slug, if valid."""
+    match RepoRef.parse(repo):
+        case Ok(ref):
+            return a11y_review_workflow_id(TargetRepo(repo=ref))
+        case _:
+            return None
+
+
+def _pr_a11y_prefix(repo: str) -> str | None:
+    """The id prefix every per-PR a11y review of ``repo`` shares (join key)."""
+    a11y_id = _a11y_id(repo)
+    if a11y_id is None:
+        return None
+    # froot-a11y-<slug> -> froot-pr-a11y-<slug>- ; the pr/sha tail follows.
+    return "froot-pr-a11y-" + a11y_id.removeprefix("froot-a11y-") + "-"
+
+
+def _attribute_a11y_repo(
+    workflow_id: str, repos: tuple[str, ...]
+) -> str | None:
+    """The configured repo a per-PR-a11y id belongs to (longest prefix)."""
+    best: str | None = None
+    best_len = -1
+    for repo in repos:
+        prefix = _pr_a11y_prefix(repo)
+        if prefix and workflow_id.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = repo, len(prefix)
+    return best
+
+
+def _a11y_loops(
+    repos: tuple[str, ...], a11y_reviews: tuple[A11yExecution, ...]
+) -> tuple[A11yLoop, ...]:
+    """One liveness row per repo that actually has an a11y loop.
+
+    Scoped to the Temporal repos, so a configured repo with no a11y loop is
+    omitted rather than shown as a dead one.
+    """
+    by_id: dict[str, A11yExecution] = {}
+    for review in a11y_reviews:
+        current = by_id.get(review.workflow_id)
+        if current is None or _newer(review.start, current.start):
+            by_id[review.workflow_id] = review
+    loops: list[A11yLoop] = []
+    for repo in repos:
+        a11y_id = _a11y_id(repo)
+        execution = by_id.get(a11y_id) if a11y_id is not None else None
+        if execution is None:
+            continue
+        loops.append(
+            A11yLoop(
+                repo=repo,
+                status=execution.status,
+                live=execution.status in _LIVE_STATUSES,
+                last_tick=execution.start,
+            )
+        )
+    return tuple(loops)
+
+
+def _a11y_rows(
+    pr_a11y_reviews: tuple[PrA11yExecution, ...], repos: tuple[str, ...]
+) -> tuple[A11yRow, ...]:
+    """Project each per-PR a11y review into a row, newest review first."""
+    rows: list[A11yRow] = []
+    for execution in pr_a11y_reviews:
+        repo = _attribute_a11y_repo(execution.workflow_id, repos)
+        pr_url = (
+            f"https://github.com/{repo}/pull/{execution.pr_number}"
+            if repo is not None and execution.pr_number is not None
+            else None
+        )
+        rows.append(
+            A11yRow(
+                repo=repo or "?",
+                pr_number=execution.pr_number,
+                pr_url=pr_url,
+                head_sha=execution.head_sha,
+                findings=execution.findings,
+                kinds=execution.kinds,
+                comment_url=execution.comment_url,
+                status=execution.status,
+                reviewed_at=execution.close or execution.start,
+            )
+        )
+    rows.sort(
+        key=lambda r: r.reviewed_at.timestamp() if r.reviewed_at else 0.0,
+        reverse=True,
+    )
+    return tuple(rows)
+
+
+def _a11y_record(
+    loops: tuple[A11yLoop, ...], rows: tuple[A11yRow, ...]
+) -> A11yRecord:
+    """Counts over the completed a11y reviews."""
+    completed = [r for r in rows if r.status == "completed"]
+    flagged = sum(1 for r in completed if r.findings > 0)
+    issues = sum(r.findings for r in completed)
+    return A11yRecord(
+        reviewed=len(completed),
+        flagged=flagged,
+        clean=len(completed) - flagged,
+        issues=issues,
+        repos_covered=len(loops),
+    )
+
+
 def _sources(
     github_error: str | None,
     github_count: int,
@@ -718,6 +836,7 @@ def assemble(
     policy: AutonomyPolicy = _DEFAULT_POLICY,
     scan_interval_seconds: int,
     review_interval_seconds: int,
+    a11y_interval_seconds: int,
     github: tuple[tuple[GithubPr, ...], str | None],
     temporal: tuple[
         tuple[
@@ -725,6 +844,8 @@ def assemble(
             tuple[BumpExecution, ...],
             tuple[ReviewExecution, ...],
             tuple[PrReviewExecution, ...],
+            tuple[A11yExecution, ...],
+            tuple[PrA11yExecution, ...],
         ],
         str | None,
     ],
@@ -739,7 +860,17 @@ def assemble(
     outcome reader (best-effort); absent for a merge older than the window.
     """
     prs, github_error = github
-    (scans, bumps, reviews, pr_reviews), temporal_error = temporal
+    (
+        (
+            scans,
+            bumps,
+            reviews,
+            pr_reviews,
+            a11y_reviews,
+            pr_a11y_reviews,
+        ),
+        temporal_error,
+    ) = temporal
     run_telemetry, clickhouse_error = telemetry
 
     all_rows = _bump_rows(now, prs, bumps, outcomes or {})
@@ -765,6 +896,8 @@ def assemble(
     )
     review_loops = _review_loops(repos, reviews)
     review_rows = _review_rows(pr_reviews, repos)
+    a11y_loops = _a11y_loops(repos, a11y_reviews)
+    a11y_rows = _a11y_rows(pr_a11y_reviews, repos)
     return DashboardModel(
         generated_at=now,
         repos_configured=repos,
@@ -773,7 +906,12 @@ def assemble(
             github_error,
             len(prs),
             temporal_error,
-            len(scans) + len(bumps) + len(reviews) + len(pr_reviews),
+            len(scans)
+            + len(bumps)
+            + len(reviews)
+            + len(pr_reviews)
+            + len(a11y_reviews)
+            + len(pr_a11y_reviews),
             run_telemetry,
             clickhouse_error,
         ),
@@ -791,6 +929,10 @@ def assemble(
         review_loops=review_loops,
         review_record=_review_record(review_loops, review_rows),
         reviews=review_rows,
+        a11y_interval_seconds=a11y_interval_seconds,
+        a11y_loops=a11y_loops,
+        a11y_record=_a11y_record(a11y_loops, a11y_rows),
+        a11y_reviews=a11y_rows,
         telemetry=run_telemetry,
         bump_loops=bump_loops,
     )

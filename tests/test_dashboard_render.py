@@ -7,7 +7,9 @@ from froot.dashboard import read_model, render
 from froot.dashboard.github_source import GithubPr
 from froot.dashboard.model import ActivityStat, DashboardModel, RunTelemetry
 from froot.dashboard.temporal_source import (
+    A11yExecution,
     BumpExecution,
+    PrA11yExecution,
     PrReviewExecution,
     ReviewExecution,
     ScanExecution,
@@ -25,6 +27,8 @@ def _model(
     telemetry: tuple[RunTelemetry, str | None] | None = None,
     reviews: Sequence[ReviewExecution] = (),
     pr_reviews: Sequence[PrReviewExecution] = (),
+    a11y_reviews: Sequence[A11yExecution] = (),
+    pr_a11y_reviews: Sequence[PrA11yExecution] = (),
 ) -> DashboardModel:
     if telemetry is None:
         telemetry = (
@@ -43,8 +47,19 @@ def _model(
         repos=(REPO,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=((tuple(scans), (), tuple(reviews), tuple(pr_reviews)), None),
+        temporal=(
+            (
+                tuple(scans),
+                (),
+                tuple(reviews),
+                tuple(pr_reviews),
+                tuple(a11y_reviews),
+                tuple(pr_a11y_reviews),
+            ),
+            None,
+        ),
         telemetry=telemetry,
     )
 
@@ -78,7 +93,12 @@ def test_page_is_tabbed_one_per_loop_plus_determinism_and_telemetry():
     assert '<nav class="tabbar">' in html
     # CSS-only tabs: hidden radio inputs drive the panels (no external JS).
     assert 'type="radio"' in html and "<script src" not in html.lower()
-    for label in ("Dependency-patch", "Determinism review", "Telemetry"):
+    for label in (
+        "Dependency-patch",
+        "Determinism review",
+        "A11y review",
+        "Telemetry",
+    ):
         assert label in html
     # the footer's authority envelope, trimmed of the word-bomb
     assert "Authority envelope" in html
@@ -107,8 +127,9 @@ def test_dead_code_loop_renders_with_scissors_and_unused():
         loops=(Loop.DEAD_CODE,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((rm,), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=(
             RunTelemetry(
                 available=False,
@@ -274,6 +295,62 @@ def test_clean_review_renders_clean_not_a_hazard():
     assert ">clean<" in html
 
 
+# ── source-level a11y review tab ─────────────────────────────────────────────
+def _a11y(status: str = "running") -> A11yExecution:
+    return A11yExecution(
+        workflow_id="froot-a11y-mseeks-revisionist",
+        status=status,
+        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
+    )
+
+
+def _pr_a11y(
+    pr: int,
+    findings: int,
+    kinds: tuple[str, ...],
+    comment: str | None = None,
+) -> PrA11yExecution:
+    return PrA11yExecution(
+        workflow_id=f"froot-pr-a11y-mseeks-revisionist-{pr}-abc1234def56",
+        status="completed",
+        start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
+        close=datetime(2026, 6, 3, 6, 1, tzinfo=UTC),
+        pr_number=pr,
+        head_sha="abc1234def56",
+        findings=findings,
+        kinds=kinds,
+        comment_url=comment,
+    )
+
+
+def test_a11y_tab_has_its_own_treatment_and_empty_state():
+    html = render.page(_model())
+    assert "A11y review" in html
+    assert "source-level gaps" in html
+    assert "No PRs reviewed yet" in html
+
+
+def test_a11y_tab_counts_a_live_loop():
+    html = render.page(_model(a11y_reviews=[_a11y("running")]))
+    assert "A11y loop" in html  # the per-tab cadence line
+    assert "loops live" in html  # the liveness card
+
+
+def test_flagged_a11y_renders_gap_count_and_comment_link():
+    comment = f"https://github.com/{REPO}/pull/7#issuecomment-9"
+    pr_a11y = [_pr_a11y(7, 1, ("missing-alt",), comment=comment)]
+    html = render.page(_model(pr_a11y_reviews=pr_a11y))
+    assert "missing-alt" in html
+    assert "1 gap" in html
+    assert "#7" in html
+    assert comment in html  # the one-click comment link
+
+
+def test_clean_a11y_renders_clean_not_a_gap():
+    html = render.page(_model(pr_a11y_reviews=[_pr_a11y(8, 0, ())]))
+    assert ">clean<" in html
+
+
 # ── the gate: per-class standing + queue badge ───────────────────────────────
 def _model_p(
     prs: Sequence[GithubPr],
@@ -298,8 +375,9 @@ def _model_p(
         policy=policy,
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=(((), tuple(bumps), (), ()), None),
+        temporal=(((), tuple(bumps), (), (), (), ()), None),
         telemetry=telemetry,
         outcomes=outcomes,
     )
@@ -337,8 +415,9 @@ def test_hero_says_no_classes_when_no_repos_configured():
         repos=(),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=((), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=(
             RunTelemetry(
                 available=False,
@@ -405,8 +484,9 @@ def _model_outcomes(
         repos=(REPO,),
         scan_interval_seconds=86_400,
         review_interval_seconds=300,
+        a11y_interval_seconds=300,
         github=(tuple(prs), None),
-        temporal=(((), (), (), ()), None),
+        temporal=(((), (), (), (), (), ()), None),
         telemetry=telemetry,
         outcomes=outcomes,
         reliability_window_days=90,

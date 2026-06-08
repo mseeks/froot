@@ -87,6 +87,33 @@ class PrReviewExecution(Frozen):
     comment_url: str | None
 
 
+class A11yExecution(Frozen):
+    """One a11y-review-loop execution (several per id across CAN)."""
+
+    workflow_id: str
+    status: str
+    start: datetime | None
+
+
+class PrA11yExecution(Frozen):
+    """One per-PR a11y review, with its result (if completed).
+
+    The finding count + flagged kinds + advisory comment come from the
+    ``PrA11yReviewWorkflow`` result; the repo is recovered by the read-model
+    from the deterministic workflow id (it encodes the slug).
+    """
+
+    workflow_id: str
+    status: str
+    start: datetime | None
+    close: datetime | None
+    pr_number: int | None
+    head_sha: str | None
+    findings: int
+    kinds: tuple[str, ...]
+    comment_url: str | None
+
+
 def _status(execution: WorkflowExecution) -> str:
     """Lowercase the Temporal status enum (``continued_as_new`` etc.)."""
     status = execution.status
@@ -228,11 +255,58 @@ async def _review_outcome(
     )
 
 
+class _A11yOutcome(Frozen):
+    """The bits of a completed a11y review's result the read-model joins on."""
+
+    pr_number: int | None
+    head_sha: str | None
+    findings: int
+    kinds: tuple[str, ...]
+    comment_url: str | None
+
+
+async def _a11y_outcome(
+    client: Client, execution: WorkflowExecution
+) -> _A11yOutcome:
+    """A completed a11y review's result (pr/head/findings/kinds/comment)."""
+    empty = _A11yOutcome(
+        pr_number=None, head_sha=None, findings=0, kinds=(), comment_url=None
+    )
+    try:
+        handle = client.get_workflow_handle(
+            execution.id, run_id=execution.run_id
+        )
+        data = _as_dict(await handle.result())
+    except Exception:  # best-effort enrichment — a bad decode is never fatal
+        return empty
+    if data is None:
+        return empty
+    raw = data.get("findings")
+    findings = raw if isinstance(raw, list) else []
+    kinds = tuple(
+        str(f["kind"])
+        for f in findings
+        if isinstance(f, dict) and isinstance(f.get("kind"), str)
+    )
+    number = data.get("pr_number")
+    head = data.get("head_sha")
+    comment = data.get("comment_url")
+    return _A11yOutcome(
+        pr_number=number if isinstance(number, int) else None,
+        head_sha=head if isinstance(head, str) else None,
+        findings=len(findings),
+        kinds=kinds,
+        comment_url=comment if isinstance(comment, str) else None,
+    )
+
+
 type _Ledger = tuple[
     tuple[ScanExecution, ...],
     tuple[BumpExecution, ...],
     tuple[ReviewExecution, ...],
     tuple[PrReviewExecution, ...],
+    tuple[A11yExecution, ...],
+    tuple[PrA11yExecution, ...],
 ]
 
 
@@ -242,9 +316,18 @@ async def fetch(client: Client) -> tuple[_Ledger, str | None]:
     bumps: list[BumpExecution] = []
     reviews: list[ReviewExecution] = []
     pr_reviews: list[PrReviewExecution] = []
+    a11y_reviews: list[A11yExecution] = []
+    pr_a11y_reviews: list[PrA11yExecution] = []
 
     def ledger() -> _Ledger:
-        return (tuple(scans), tuple(bumps), tuple(reviews), tuple(pr_reviews))
+        return (
+            tuple(scans),
+            tuple(bumps),
+            tuple(reviews),
+            tuple(pr_reviews),
+            tuple(a11y_reviews),
+            tuple(pr_a11y_reviews),
+        )
 
     try:
         async for execution in _take(
@@ -316,6 +399,41 @@ async def fetch(client: Client) -> tuple[_Ledger, str | None]:
                     findings=review.findings,
                     rules=review.rules,
                     comment_url=review.comment_url,
+                )
+            )
+        async for execution in _take(
+            client.list_workflows("WorkflowType = 'A11yReviewWorkflow'")
+        ):
+            a11y_reviews.append(
+                A11yExecution(
+                    workflow_id=execution.id,
+                    status=_status(execution),
+                    start=execution.start_time,
+                )
+            )
+        async for execution in _take(
+            client.list_workflows("WorkflowType = 'PrA11yReviewWorkflow'")
+        ):
+            a11y = _A11yOutcome(
+                pr_number=None,
+                head_sha=None,
+                findings=0,
+                kinds=(),
+                comment_url=None,
+            )
+            if execution.status is WorkflowExecutionStatus.COMPLETED:
+                a11y = await _a11y_outcome(client, execution)
+            pr_a11y_reviews.append(
+                PrA11yExecution(
+                    workflow_id=execution.id,
+                    status=_status(execution),
+                    start=execution.start_time,
+                    close=execution.close_time,
+                    pr_number=a11y.pr_number,
+                    head_sha=a11y.head_sha,
+                    findings=a11y.findings,
+                    kinds=a11y.kinds,
+                    comment_url=a11y.comment_url,
                 )
             )
     except Exception as exc:  # degrade to an error string, never crash the page
