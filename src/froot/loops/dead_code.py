@@ -79,5 +79,6 @@ register(
         judge_context=None,
         # A removal carries no version to be overtaken — nothing to reconcile.
         reconciles=False,
+        dashboard_icon="scissors",
     )
 )

@@ -71,6 +71,9 @@ class LoopSpec:
             for bump loops, ``False`` for a loop whose work item carries no
             version to be overtaken (dead-code removals). The reconcile activity
             keys on this instead of naming the loop.
+        dashboard_icon: The icon key for this loop's dashboard tab (one of the
+            renderer's ``_ICONS``). Carried here so a new loop's tab is fully
+            presented from its spec — no per-loop arm in the renderer.
     """
 
     loop: Loop
@@ -79,6 +82,7 @@ class LoopSpec:
     id_segment: tuple[str, ...]
     judge_context: str | None = None
     reconciles: bool = True
+    dashboard_icon: str = "package"
 
 
 _LOOPS: dict[Loop, LoopSpec] = {}

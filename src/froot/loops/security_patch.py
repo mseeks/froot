@@ -54,5 +54,6 @@ register(
         observe=observe,
         id_segment=(Loop.SECURITY_PATCH.value,),
         judge_context=_JUDGE_CONTEXT,
+        dashboard_icon="shield",
     )
 )
