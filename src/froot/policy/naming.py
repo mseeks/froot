@@ -141,3 +141,29 @@ def pr_review_workflow_id(
             _slug(head_sha[:12]),
         )
     )
+
+
+def a11y_review_workflow_id(repo: TargetRepo) -> str:
+    """The deterministic per-repo a11y-review loop id (a singleton)."""
+    return "-".join(
+        ("froot-a11y", _slug(repo.repo.owner), _slug(repo.repo.name))
+    )
+
+
+def pr_a11y_review_workflow_id(
+    repo: TargetRepo, pr_number: int, head_sha: str
+) -> str:
+    """The deterministic per-(PR, head SHA) a11y review id (the dedup key).
+
+    Keyed on the head SHA so a new commit triggers a fresh review, and
+    re-dispatch of the same commit is a no-op (REJECT_DUPLICATE).
+    """
+    return "-".join(
+        (
+            "froot-pr-a11y",
+            _slug(repo.repo.owner),
+            _slug(repo.repo.name),
+            _slug(str(pr_number)),
+            _slug(head_sha[:12]),
+        )
+    )

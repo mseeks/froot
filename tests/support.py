@@ -146,6 +146,8 @@ class FakeForge:
         ci: CIStatus | None = None,
         ci_sequence: tuple[CIStatus, ...] = (),
         open_prs: tuple[PullRequestRef, ...] = (),
+        changed_files: tuple[str, ...] = (),
+        marked_comment: bool = False,
     ) -> None:
         self.existing_pr = existing_pr
         self.opened_pr = opened_pr or make_pr()
@@ -154,6 +156,10 @@ class FakeForge:
         # ``ci``), so a test can exercise the durable pending -> terminal wait.
         self._ci_replies = list(ci_sequence)
         self.open_prs = open_prs
+        # The PR's changed file paths (the a11y reviewer's scope) and whether a
+        # froot marker comment already exists (for the decay decision).
+        self.changed_files = changed_files
+        self.marked_comment = marked_comment
         self.checked_out = False
         self.checked_out_pr: int | None = None
         self.pushed: BranchName | None = None
@@ -191,12 +197,22 @@ class FakeForge:
     ) -> tuple[PullRequestRef, ...]:
         return self.open_prs
 
+    async def list_pull_request_files(
+        self, target: TargetRepo, number: int
+    ) -> tuple[str, ...]:
+        return self.changed_files
+
     async def upsert_issue_comment(
         self, target: TargetRepo, number: int, marker: str, body: str
     ) -> str:
         self.upserted = (number, body)
         self.comments.append((number, body))
         return f"https://github.com/{target.repo.slug}/pull/{number}#comment"
+
+    async def find_marked_comment(
+        self, target: TargetRepo, number: int, marker: str
+    ) -> bool:
+        return self.marked_comment
 
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft

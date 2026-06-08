@@ -233,9 +233,17 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
    four independent bearings (approval rate, post-merge defect rate, an adversarial gate
    self-test, an independent deep review) on an allowlisted repo. *Done — off by default until a
    steward allowlists a repo.*
-5. **Coordinate.** Notifier loops (`determinism` ships; `derived-state` next) that durably guard
-   an already-running durable app, and loops reading each other's GitHub/ClickStack signals. *In
-   progress.*
+5. **Coordinate.** Notifier loops that leave an advisory signal rather than merge: `determinism`
+   (guards this durable app's own replay-safety) ships, and `a11y-review` ships — a source-level
+   accessibility reviewer that comments on a PR's changed Vue/JSX templates (unnamed
+   `role="img"`/`<svg>`, unlabeled controls, a click on a non-interactive element with no keyboard
+   path, an `<img>` with no alt), the static complement to a target's *runtime* axe checks. It
+   reuses the determinism reviewer's ring whole (per-repo self-scheduling loop → per-PR pipeline →
+   one marker-upserted comment), swapping only the signal (a dialect-aware regex sweep), the judge
+   (a cite-or-omit a11y adjudicator), and the prompt — the chassis/loop seam working — and it
+   self-clears the comment when a PR's gaps are fixed (the decay the determinism reviewer lacks).
+   It is **propose-only and off by default** (`FROOT_A11Y_ENABLED`), per observe-then-act (§3.4);
+   `derived-state` next, plus loops reading each other's GitHub/ClickStack signals. *In progress.*
 6. **Later — fixers.** Loops that write arbitrary code (flaky-test, refactor-candidate). These
    are the ones that need a real agentic coding harness; that decision is made *then*, on terrain
    that already works — not now.
