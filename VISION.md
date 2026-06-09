@@ -72,6 +72,16 @@ without rewiring the plant.*
      back the JSON. The microVM has egress to the package registries but no path
      back into the cluster. *Shipped — the uv dead-code arm runs this on every
      `@uv` repo each tick; with no `FROOT_E2B_API_KEY` it degrades to no-op.*
+   - **The sandbox now hosts an *action*, not just a signal.** The dead-export
+     codemod is the first: deleting a truly-dead exported symbol (vs. just
+     un-exporting it) needs an AST, which the Python worker can't run — so a
+     Node + `ts-morph` codemod runs in the same e2b sandbox, mutates the
+     checkout, and returns the edits as a `{path: content}` map on stdout; the
+     worker applies them and pushes, CI the oracle. *Shipped — this is the
+     reusable `run-in-sandbox → apply-edits` seam the agentic fabrication harness
+     later rides (it swaps the deterministic codemod for the LLM harness behind
+     the same seam); with no `FROOT_E2B_API_KEY` it falls back to the in-worker
+     regex un-export.*
    - **e2b sidesteps the in-cluster microVM problem by being off-cluster.** DOKS
      gives no guaranteed `/dev/kvm`, so *in-cluster* Kata/Firecracker degrade to
      software emulation and gVisor would be the only viable in-cluster strong
