@@ -414,7 +414,13 @@ async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
             case DeadFile():
                 _delete_dead_file(manifest_dir, item)
             case DeadExport():
-                _apply_dead_export(manifest_dir, item)
+                # Prefer the AST codemod in the sandbox (deletes a truly-dead
+                # symbol, un-exports one still used in-file); fall back to the
+                # in-worker regex un-export when no sandbox is configured.
+                from froot.adapters.codemod import apply_export_codemod
+
+                if not await apply_export_codemod(manifest_dir, item):
+                    _apply_dead_export(manifest_dir, item)
         await forge.push_branch(workspace, branch, draft.title)
     return await forge.open_pull_request(params.target, draft)
 

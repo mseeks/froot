@@ -216,16 +216,18 @@ def dead_export_pull_request_draft(
     *,
     title_prefix: str,
 ) -> PullRequestDraft:
-    """Build the deterministic PR content for an un-export (no model call).
+    """Build the deterministic PR content for a dead export (no model call).
 
-    A dead export is *un-exported*, not deleted: knip flags "not imported by
-    another module", so stripping the ``export`` makes the symbol module-private
-    while leaving any in-file use intact. The body states this so the small diff
-    reads as intended, and names the safe-to-remove veto's "why".
+    knip flags an export no other module imports. The action removes it: the
+    sandbox codemod deletes the declaration outright when nothing else in the
+    file uses it, or strips just the ``export`` (leaving it module-private) when
+    it is still used in-file; with no sandbox configured the in-worker fallback
+    always un-exports. The body states both outcomes so the diff reads as
+    intended either way, and names the safe-to-remove veto's "why".
 
     Args:
         target: The repo the PR is opened against (gives the base branch).
-        item: The unused export being made module-private.
+        item: The unused export being removed.
         loop: Which loop is proposing — sets the branch namespace.
         title_prefix: The PR-title verb (``dead-code``), from the loop's spec.
 
@@ -233,8 +235,9 @@ def dead_export_pull_request_draft(
         A :class:`PullRequestDraft` ready for the forge to open.
     """
     lines = [
-        f"Drops the unused `export` on `{item.symbol}` in `{item.file}` "
-        f"(no other module imports it), leaving it module-private.",
+        f"Removes the unused export `{item.symbol}` from `{item.file}` "
+        f"(no other module imports it): deleted if nothing else uses it, "
+        f"otherwise made module-private.",
     ]
     if item.justification is not None:
         lines += ["", item.justification]
@@ -246,7 +249,7 @@ def dead_export_pull_request_draft(
     return PullRequestDraft(
         branch=branch_name(item, loop),
         base=target.default_branch,
-        title=f"{title_prefix}: un-export {item.symbol} ({item.file})",
+        title=f"{title_prefix}: remove unused export {item.symbol}",
         body="\n".join(lines),
     )
 

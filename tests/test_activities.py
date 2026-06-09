@@ -7,6 +7,7 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 import froot.adapters.changelog_http as changelog_mod
+import froot.adapters.codemod as codemod_mod
 import froot.adapters.github as github_mod
 import froot.adapters.model_judge as model_mod
 import froot.adapters.osv as osv_mod
@@ -458,11 +459,15 @@ async def test_open_pull_request_dead_file_deletes_the_file(
     assert fake.pushed_tree["src/unused.ts"] is None  # the file was deleted
 
 
-async def test_open_pull_request_dead_export_strips_the_export(
+async def test_open_pull_request_dead_export_falls_back_to_unexport(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    # A dead export's action strips the `export` on the analyzer's line, leaving
-    # the symbol module-private; the rest of the file stays untouched.
+    # With no sandbox (the codemod returns False), the action strips the
+    # `export` in-worker on the analyzer's line; the rest of the file is intact.
+    async def _no_codemod(workspace, item, sandbox=None):
+        return False
+
+    monkeypatch.setattr(codemod_mod, "apply_export_codemod", _no_codemod)
     source = "const keep = 1\nexport function gone() {\n  return 2\n}\n"
     fake = FakeForge(
         existing_pr=None,
@@ -485,6 +490,39 @@ async def test_open_pull_request_dead_export_strips_the_export(
     assert fake.pushed_tree["src/util.ts"] == (
         "const keep = 1\nfunction gone() {\n  return 2\n}\n"
     )
+
+
+async def test_open_pull_request_dead_export_uses_codemod_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # When the sandbox codemod succeeds, the spine takes its edit and never runs
+    # the in-worker fallback (here the codemod deletes the symbol outright).
+    async def _codemod(workspace, item, sandbox=None):
+        (workspace / item.file).write_text("const keep = 1\n")
+        return True
+
+    monkeypatch.setattr(codemod_mod, "apply_export_codemod", _codemod)
+    source = "const keep = 1\nexport function gone() {\n  return 2\n}\n"
+    fake = FakeForge(
+        existing_pr=None,
+        opened_pr=make_pr(number=11),
+        checkout_files={"src/util.ts": source},
+    )
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(),
+    )
+    params = OpenPrInput(
+        target=make_repo(),
+        candidate=make_dead_export(file="src/util.ts", symbol="gone", line=2),
+        verdict=CleanVerdict(rationale="dead"),
+        loop=Loop.DEAD_CODE,
+    )
+    await activities.open_pull_request(params)
+    # The codemod's full deletion, not the fallback's un-export.
+    assert fake.pushed_tree["src/util.ts"] == "const keep = 1\n"
 
 
 async def test_gate_review_for_dead_source_uses_dead_source_judge(
