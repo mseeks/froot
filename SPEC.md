@@ -226,9 +226,12 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 3. **✓ Widen the work item.** dead-code — the first loop to carry non-bump work items through the
    same spine, and the first whose action edits *source*. It spans three shapes of dead weight: an
    unused **dependency** (a `Removal` — manifest+lockfile edit), a whole unused **file** (a `DeadFile`
-   — deleted), and an unused **export** (a `DeadExport` — un-exported in place, since knip flags
-   "needn't be exported", not "dead everywhere"). The last two are froot's first genuine source
-   edits. A safe-to-remove judge vetoes each *at the signal*; CI stays the oracle. npm via `knip`
+   — deleted), and an unused **export** (a `DeadExport`). The last two are froot's first genuine source
+   edits. For an export, a Node + `ts-morph` codemod in the e2b sandbox deletes the declaration when
+   nothing else in the file uses it, or strips just the `export` when it does — froot's **first action
+   run in the sandbox** (vs. a signal), the reusable plank under the future fabrication harness; with
+   no e2b key it falls back to an in-worker regex un-export. A safe-to-remove judge vetoes each *at the
+   signal*; CI stays the oracle. npm via `knip`
    (static, no install) surfaces all three *done*; the uv arm (`deptry`, deps only) *done* — it runs
    `uv sync` + `deptry` in an external e2b microVM (the sandbox where the target's deps can be
    installed; see [VISION.md](./VISION.md)), degrading to no-op when no e2b key is set. (Dead Python
