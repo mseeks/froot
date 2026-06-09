@@ -21,6 +21,7 @@ from froot.domain.changelog import (
     CleanVerdict,
 )
 from froot.domain.ci import CIPassed, CIStatus
+from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.ecosystem import Ecosystem
 from froot.domain.loop import Loop
 from froot.domain.pull_request import (
@@ -66,6 +67,30 @@ def make_removal(
         package=package,
         ecosystem=ecosystem,
         dev=dev,
+        justification=justification,
+    )
+
+
+def make_dead_file(
+    path: str = "src/unused.ts",
+    ecosystem: Ecosystem = Ecosystem.NPM,
+    justification: str | None = "unused (knip)",
+) -> DeadFile:
+    return DeadFile(path=path, ecosystem=ecosystem, justification=justification)
+
+
+def make_dead_export(
+    file: str = "src/util.ts",
+    symbol: str = "unusedHelper",
+    line: int = 1,
+    ecosystem: Ecosystem = Ecosystem.NPM,
+    justification: str | None = "unused (knip)",
+) -> DeadExport:
+    return DeadExport(
+        file=file,
+        symbol=symbol,
+        line=line,
+        ecosystem=ecosystem,
         justification=justification,
     )
 
@@ -148,6 +173,7 @@ class FakeForge:
         open_prs: tuple[PullRequestRef, ...] = (),
         changed_files: tuple[str, ...] = (),
         marked_comment: bool = False,
+        checkout_files: dict[str, str] | None = None,
     ) -> None:
         self.existing_pr = existing_pr
         self.opened_pr = opened_pr or make_pr()
@@ -162,7 +188,13 @@ class FakeForge:
         self.marked_comment = marked_comment
         self.checked_out = False
         self.checked_out_pr: int | None = None
+        # Files written into the workspace on checkout (path -> content), so a
+        # source-editing action (dead file / export) has a real tree to mutate.
+        self._checkout_files = checkout_files or {}
         self.pushed: BranchName | None = None
+        # The seeded files' content after the action ran, captured at push time
+        # before the workspace is torn down (``None`` == the file was deleted).
+        self.pushed_tree: dict[str, str | None] = {}
         self.labeled: tuple[str, ...] | None = None
         self.upserted: tuple[int, str] | None = None
         # Every close + branch-delete, in order, so reconcile/close-on-red
@@ -175,6 +207,10 @@ class FakeForge:
 
     async def checkout(self, target: TargetRepo, workspace: Path) -> None:
         self.checked_out = True
+        for rel, content in self._checkout_files.items():
+            path = workspace / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
 
     async def checkout_pull_request(
         self, target: TargetRepo, workspace: Path, number: int
@@ -185,6 +221,15 @@ class FakeForge:
         self, workspace: Path, branch: BranchName, commit_message: str
     ) -> str:
         self.pushed = branch
+        # Snapshot the seeded files' post-action state before teardown.
+        self.pushed_tree = {
+            rel: (
+                (workspace / rel).read_text()
+                if (workspace / rel).exists()
+                else None
+            )
+            for rel in self._checkout_files
+        }
         return "deadbeef1234567"
 
     async def find_open_pull_request(
@@ -325,6 +370,7 @@ class FakeJudge:
         verdict: ChangelogVerdict | None = None,
         gate_verdict: ChangelogVerdict | None = None,
         removal_verdict: ChangelogVerdict | None = None,
+        dead_source_verdict: ChangelogVerdict | None = None,
     ) -> None:
         self.verdict: ChangelogVerdict = verdict or CleanVerdict(rationale="ok")
         # The gate reviewer's verdict; defaults to the judge's, so an
@@ -335,10 +381,16 @@ class FakeJudge:
         self.removal_verdict: ChangelogVerdict = (
             removal_verdict or CleanVerdict(rationale="safe to remove")
         )
+        # The dead-source veto's verdict; also defaults to clean.
+        self.dead_source_verdict: ChangelogVerdict = (
+            dead_source_verdict or CleanVerdict(rationale="safe to remove")
+        )
         self.loops: list[Loop] = []
         self.gate_loops: list[Loop] = []
         # Every removal judged, in order, so the veto tests can assert it.
         self.removals: list[Removal] = []
+        # Every dead file / export judged, in order, for the source-veto tests.
+        self.dead_sources: list[DeadFile | DeadExport] = []
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
@@ -355,6 +407,12 @@ class FakeJudge:
     async def judge_removal(self, removal: Removal) -> ChangelogVerdict:
         self.removals.append(removal)
         return self.removal_verdict
+
+    async def judge_dead_source(
+        self, item: DeadFile | DeadExport
+    ) -> ChangelogVerdict:
+        self.dead_sources.append(item)
+        return self.dead_source_verdict
 
 
 class FakeSandbox:

@@ -42,7 +42,7 @@ async def _mock_scan(params: ScanCandidatesInput) -> tuple[Candidate, ...]:
 
 @activity.defn(name="dispatch_bump")
 async def _mock_dispatch(params: DispatchInput) -> None:
-    _dispatched.append(params.candidate.package)
+    _dispatched.append(params.candidate.subject)
     _dispatched_loops.append(params.loop.value)
 
 

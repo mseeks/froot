@@ -18,8 +18,14 @@ from typing import Annotated
 from pydantic import Field
 
 from froot.domain.candidate import Candidate
+from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.removal import Removal
 
 # One bounded unit of work, of any loop's kind. ``kind`` discriminates so the
-# Temporal data converter and the activities both route without guesswork.
-WorkItem = Annotated[Candidate | Removal, Field(discriminator="kind")]
+# Temporal data converter and the activities both route without guesswork. A
+# bump moves a version; a removal deletes a dependency; a dead file is deleted
+# whole; a dead export is stripped of its ``export``. The non-bump kinds are all
+# signal-judged (a veto at the signal, no changelog) and carry no version.
+WorkItem = Annotated[
+    Candidate | Removal | DeadFile | DeadExport, Field(discriminator="kind")
+]

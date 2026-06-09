@@ -7,7 +7,13 @@ from froot.policy.naming import (
     bump_workflow_id,
     scan_workflow_id,
 )
-from tests.support import make_candidate, make_removal, make_repo
+from tests.support import (
+    make_candidate,
+    make_dead_export,
+    make_dead_file,
+    make_removal,
+    make_repo,
+)
 
 
 def test_security_loop_namespaces_branches_and_ids():
@@ -102,6 +108,32 @@ def test_removal_names_sanitize_scoped_package():
     removal = make_removal(package="@scope/pkg")
     assert branch_name(removal).value == (
         "froot/dependency-patch/scope-pkg-unused"
+    )
+
+
+def test_dead_file_names_use_file_tail():
+    # A dead file carries no version; its branch/id tail is "<path>-file" — the
+    # first source-removal kind. Names run under DEAD_CODE, where they belong.
+    repo = make_repo("acme/widgets")
+    item = make_dead_file(path="src/old/util.ts")
+    assert branch_name(item, Loop.DEAD_CODE).value == (
+        "froot/dead-code/src-old-util.ts-file"
+    )
+    assert bump_workflow_id(repo, item, Loop.DEAD_CODE) == (
+        "froot-bump-dead-code-acme-widgets-src-old-util.ts-file"
+    )
+
+
+def test_dead_export_names_use_symbol_export_tail():
+    # A dead export's tail is "<file>-<symbol>-export", so two exports in one
+    # file get distinct, stable branches (the per-symbol idempotency key).
+    repo = make_repo("acme/widgets")
+    item = make_dead_export(file="src/util.ts", symbol="unusedHelper")
+    assert branch_name(item, Loop.DEAD_CODE).value == (
+        "froot/dead-code/src-util.ts-unusedhelper-export"
+    )
+    assert bump_workflow_id(repo, item, Loop.DEAD_CODE) == (
+        "froot-bump-dead-code-acme-widgets-src-util.ts-unusedhelper-export"
     )
 
 

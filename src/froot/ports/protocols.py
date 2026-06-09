@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     )
     from froot.domain.changelog import Changelog, ChangelogVerdict
     from froot.domain.ci import CIStatus
+    from froot.domain.dead_source import DeadExport, DeadFile
     from froot.domain.loop import Loop
     from froot.domain.pull_request import (
         BranchName,
@@ -280,6 +281,19 @@ class ModelJudge(Protocol):
         safe to remove (the loop proposes it); ``risky``/``unknown`` hold it
         back, so a tool used without an import (pytest, eslint) never becomes a
         noisy PR. Same verdict shape as :meth:`judge`, a different prompt.
+        """
+        ...
+
+    async def judge_dead_source(
+        self, item: DeadFile | DeadExport
+    ) -> ChangelogVerdict:
+        """Assess whether deleting a file / un-exporting a symbol is safe.
+
+        The source arm of the dead-code veto: ``clean`` proposes the deletion or
+        un-export; ``risky``/``unknown`` hold it. "Not imported" misses code a
+        framework loads by convention (routes, pages, plugins), dynamic imports,
+        and a published library's public API — this judge vetoes those, the same
+        veto-at-the-signal shape as :meth:`judge_removal`, a different prompt.
         """
         ...
 

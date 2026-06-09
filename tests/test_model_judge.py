@@ -13,7 +13,12 @@ from froot.domain.changelog import (
     RiskyVerdict,
     UnknownVerdict,
 )
-from tests.support import make_removal, ver
+from tests.support import (
+    make_dead_export,
+    make_dead_file,
+    make_removal,
+    ver,
+)
 
 
 def test_assessment_to_verdict_clean():
@@ -64,3 +69,12 @@ async def test_judge_removal_wires_through_a_model_offline():
     judge = PydanticAiJudge(model=TestModel())
     verdict = await judge.judge_removal(make_removal(package="left-pad"))
     assert verdict.kind in {"clean", "risky", "unknown"}
+
+
+async def test_judge_dead_source_wires_through_a_model_offline():
+    # The dead-source veto is a fourth agent over the shared _Assessment shape,
+    # asked about a file or an export; an injected model drives it offline.
+    judge = PydanticAiJudge(model=TestModel())
+    for item in (make_dead_file(), make_dead_export()):
+        verdict = await judge.judge_dead_source(item)
+        assert verdict.kind in {"clean", "risky", "unknown"}

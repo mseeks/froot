@@ -51,6 +51,8 @@ from tests.support import (
     FakePackageManager,
     make_advisory,
     make_candidate,
+    make_dead_export,
+    make_dead_file,
     make_installed,
     make_pr,
     make_removal,
@@ -385,6 +387,130 @@ async def test_record_outcome_removal_logs_remove_action(
     assert logged["package"] == "left-pad"
     assert logged["dev"] is True
     assert "from" not in logged  # no version fields for a removal
+
+
+async def test_judge_changelog_for_dead_source_is_clean_from_justification():
+    # A dead file / export already cleared its safe-to-remove veto at scan, like
+    # a removal: the in-workflow judge carries that into the PR framing with no
+    # changelog and no model call.
+    for item in (
+        make_dead_file(justification="unused file (knip)"),
+        make_dead_export(justification="unused export (knip)"),
+    ):
+        verdict = await activities.judge_changelog(JudgeInput(candidate=item))
+        assert isinstance(verdict, CleanVerdict)
+        assert verdict.rationale == item.justification
+
+
+async def test_open_pull_request_dead_file_deletes_the_file(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A dead file's action deletes the file (no package-manager call); push
+    # then stages the deletion. CI is still the oracle.
+    fake = FakeForge(
+        existing_pr=None,
+        opened_pr=make_pr(number=9),
+        checkout_files={"src/unused.ts": "export const x = 1\n"},
+    )
+    package_manager = FakePackageManager()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod, "package_manager_for", lambda ecosystem: package_manager
+    )
+    params = OpenPrInput(
+        target=make_repo(),
+        candidate=make_dead_file(path="src/unused.ts"),
+        verdict=CleanVerdict(rationale="dead"),
+        loop=Loop.DEAD_CODE,
+    )
+    pr = await activities.open_pull_request(params)
+    assert pr.number == 9
+    assert package_manager.applied is None and package_manager.removed == []
+    assert fake.pushed_tree["src/unused.ts"] is None  # the file was deleted
+
+
+async def test_open_pull_request_dead_export_strips_the_export(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A dead export's action strips the `export` on the analyzer's line, leaving
+    # the symbol module-private; the rest of the file stays untouched.
+    source = "const keep = 1\nexport function gone() {\n  return 2\n}\n"
+    fake = FakeForge(
+        existing_pr=None,
+        opened_pr=make_pr(number=10),
+        checkout_files={"src/util.ts": source},
+    )
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(),
+    )
+    params = OpenPrInput(
+        target=make_repo(),
+        candidate=make_dead_export(file="src/util.ts", symbol="gone", line=2),
+        verdict=CleanVerdict(rationale="dead"),
+        loop=Loop.DEAD_CODE,
+    )
+    await activities.open_pull_request(params)
+    assert fake.pushed_tree["src/util.ts"] == (
+        "const keep = 1\nfunction gone() {\n  return 2\n}\n"
+    )
+
+
+async def test_gate_review_for_dead_source_uses_dead_source_judge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The fourth leg for a dead file / export re-runs the dead-source veto (not
+    # the dependency one); a clean verdict approves the auto-merge.
+    judge = FakeJudge(dead_source_verdict=CleanVerdict(rationale="safe"))
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: judge)
+    item = make_dead_file(path="src/unused.ts")
+    verdict = await activities.gate_review(
+        GateReviewInput(candidate=item, pr=make_pr(), loop=Loop.DEAD_CODE)
+    )
+    assert isinstance(verdict, CleanVerdict)
+    assert judge.dead_sources == [item]
+    assert judge.removals == []  # the dependency judge was not touched
+
+
+async def test_record_outcome_dead_source_logs_source_actions(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # Each source kind records its own action + detail in the run-ledger row.
+    fake = FakeForge()
+    monkeypatch.setattr(github_mod, "GitHubForge", lambda: fake)
+    cases = (
+        (
+            make_dead_file(path="src/unused.ts"),
+            {"action": "remove_file", "path": "src/unused.ts"},
+        ),
+        (
+            make_dead_export(file="src/util.ts", symbol="gone"),
+            {"action": "unexport", "file": "src/util.ts", "symbol": "gone"},
+        ),
+    )
+    for item, expected in cases:
+        outcome = LoopOutcome(
+            candidate=item,
+            verdict=CleanVerdict(rationale="dead"),
+            pr=make_pr(),
+            ci=CIPassed(),
+        )
+        with caplog.at_level("INFO", logger="froot.outcome"):
+            await activities.record_outcome(
+                RecordInput(
+                    target=make_repo(), outcome=outcome, loop=Loop.DEAD_CODE
+                )
+            )
+        logged = json.loads(
+            [r for r in caplog.records if r.name == "froot.outcome"][
+                -1
+            ].getMessage()
+        )
+        assert logged["package"] == item.subject
+        for key, value in expected.items():
+            assert logged[key] == value
 
 
 async def test_check_ci(monkeypatch: pytest.MonkeyPatch):
