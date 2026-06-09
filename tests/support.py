@@ -304,7 +304,7 @@ class FakePackageManager:
         self,
         upgrades: tuple[AvailableUpgrade, ...] = (),
         installed: tuple[InstalledPackage, ...] = (),
-        unused: tuple[Removal, ...] = (),
+        unused: tuple[Removal | DeadFile | DeadExport, ...] = (),
     ) -> None:
         self.upgrades = upgrades
         self.installed = installed
@@ -331,7 +331,7 @@ class FakePackageManager:
 
     async def list_unused(
         self, target: TargetRepo, workspace: Path
-    ) -> tuple[Removal, ...]:
+    ) -> tuple[Removal | DeadFile | DeadExport, ...]:
         return self.unused
 
     async def remove_dependency(

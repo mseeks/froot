@@ -166,6 +166,35 @@ async def test_scan_candidates_dead_code_vetoes_unsafe_removals(
     assert result == ()
 
 
+async def test_scan_candidates_dead_code_keeps_source_dead_code(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The source arm: a dead file + dead export go through the dead-source veto
+    # (judge_dead_source, not judge_removal); survivors carry its rationale.
+    unused = (
+        make_dead_file(path="src/orphan.ts"),
+        make_dead_export(file="src/util.ts", symbol="gone", line=2),
+    )
+    judge = FakeJudge(dead_source_verdict=CleanVerdict(rationale="truly dead"))
+    monkeypatch.setattr(github_mod, "GitHubForge", FakeForge)
+    monkeypatch.setattr(
+        registry_mod,
+        "package_manager_for",
+        lambda ecosystem: FakePackageManager(unused=unused),
+    )
+    monkeypatch.setattr(model_mod, "PydanticAiJudge", lambda: judge)
+    result = await activities.scan_candidates(
+        ScanCandidatesInput(target=make_repo(), loop=Loop.DEAD_CODE)
+    )
+    assert [item.kind for item in result] == ["dead_file", "dead_export"]
+    assert all(
+        item.justification == "unused (knip); truly dead" for item in result
+    )
+    # The source veto ran, never the dependency one.
+    assert judge.dead_sources == list(unused)
+    assert judge.removals == []
+
+
 async def test_reconcile_skips_dead_code(monkeypatch: pytest.MonkeyPatch):
     # Reconcile is version-supersession cleanup; a removal has no version, so
     # dead-code reconcile must return 0 *without* re-running its signal (which

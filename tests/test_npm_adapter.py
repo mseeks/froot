@@ -8,11 +8,17 @@ import pytest
 from froot.adapters import npm as npm_mod
 from froot.adapters.npm import (
     NpmPackageManager,
+    narrow_unexportable,
     parse_direct_dependencies,
+    parse_knip_exports,
+    parse_knip_files,
     parse_knip_unused,
     parse_locked_versions,
     parse_versions,
 )
+from froot.domain.dead_source import DeadFile
+from froot.domain.ecosystem import Ecosystem
+from froot.domain.removal import Removal
 from tests.support import make_removal, make_repo, ver
 
 
@@ -159,12 +165,12 @@ async def test_list_unused_builds_removals_from_knip(
         return 1, _KNIP_JSON, ""
 
     monkeypatch.setattr(npm_mod, "run_text", fake_run_text)
-    removals = await NpmPackageManager().list_unused(make_repo(), tmp_path)
-    assert [(r.package, r.dev) for r in removals] == [
+    result = await NpmPackageManager().list_unused(make_repo(), tmp_path)
+    assert [(r.package, r.dev) for r in result if isinstance(r, Removal)] == [
         ("left-pad", False),
         ("is-odd", True),
     ]
-    assert all(r.justification == "unused (knip)" for r in removals)
+    assert all(r.justification == "unused (knip)" for r in result)
 
 
 async def test_list_unused_degrades_when_knip_absent(
@@ -178,6 +184,99 @@ async def test_list_unused_degrades_when_knip_absent(
     monkeypatch.setattr(npm_mod, "run_text", fake_run_text)
     removals = await NpmPackageManager().list_unused(make_repo(), tmp_path)
     assert removals == ()
+
+
+# A knip body with all three dead-code shapes: a top-level unused file, an
+# unused export and an unused type (both inline), plus an unused dependency.
+_KNIP_DEAD_CODE_JSON = json.dumps(
+    {
+        "files": ["src/orphan.ts"],
+        "issues": [
+            {
+                "file": "package.json",
+                "dependencies": [{"name": "left-pad", "line": 5, "col": 6}],
+                "devDependencies": [],
+                "exports": [],
+            },
+            {
+                "file": "src/util.ts",
+                "dependencies": [],
+                "devDependencies": [],
+                "exports": [{"name": "gone", "line": 2, "col": 8}],
+                "types": [{"name": "Unused", "line": 4, "col": 13}],
+            },
+        ],
+    }
+)
+
+
+def test_parse_knip_files():
+    assert parse_knip_files(_KNIP_DEAD_CODE_JSON) == ("src/orphan.ts",)
+    assert parse_knip_files(json.dumps({"issues": []})) == ()  # no files key
+    assert parse_knip_files("not json") == ()
+
+
+def test_parse_knip_exports_folds_exports_and_types():
+    # Unused values and unused types are both exported-but-unimported symbols
+    # the action un-exports the same way, so they fold into (file, name, line).
+    assert parse_knip_exports(_KNIP_DEAD_CODE_JSON) == (
+        ("src/util.ts", "gone", 2),
+        ("src/util.ts", "Unused", 4),
+    )
+
+
+def test_parse_knip_exports_skips_entries_missing_name_or_line():
+    body = json.dumps(
+        {"issues": [{"file": "a.ts", "exports": [{"name": "x"}, {"line": 3}]}]}
+    )
+    assert parse_knip_exports(body) == ()
+
+
+def test_narrow_unexportable_keeps_inline_drops_the_rest(tmp_path: Path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "util.ts").write_text(
+        "const keep = 1\nexport function gone() {}\nexport { reexp }\n"
+    )
+    exports = (
+        ("src/util.ts", "gone", 2),  # inline decl -> kept
+        ("src/util.ts", "reexp", 3),  # clause re-export -> dropped
+        ("src/util.ts", "missing", 99),  # line out of range -> dropped
+        ("src/absent.ts", "x", 1),  # unreadable file -> dropped
+    )
+    kept, dropped = narrow_unexportable(tmp_path, exports, Ecosystem.NPM)
+    assert [(e.file, e.symbol, e.line) for e in kept] == [
+        ("src/util.ts", "gone", 2)
+    ]
+    assert dropped == 3
+    assert all(e.justification == "unused export (knip)" for e in kept)
+
+
+async def test_list_unused_surfaces_deps_files_and_exports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    # One knip run yields all three kinds; the exports are narrowed against the
+    # real source lines in the checkout (both are inline declarations here).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "util.ts").write_text(
+        "const keep = 1\n"
+        "export function gone() {}\n"
+        "const x = 1\n"
+        "export type Unused = number\n"
+    )
+
+    async def fake_run_text(*args: str, cwd: Path) -> tuple[int, str, str]:
+        return 1, _KNIP_DEAD_CODE_JSON, ""
+
+    monkeypatch.setattr(npm_mod, "run_text", fake_run_text)
+    items = await NpmPackageManager().list_unused(make_repo(), tmp_path)
+    assert [item.kind for item in items] == [
+        "removal",
+        "dead_file",
+        "dead_export",
+        "dead_export",
+    ]
+    files = [item for item in items if isinstance(item, DeadFile)]
+    assert files[0].path == "src/orphan.ts"
 
 
 async def test_remove_dependency_runs_npm_uninstall(

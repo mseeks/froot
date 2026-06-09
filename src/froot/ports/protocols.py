@@ -71,13 +71,17 @@ class PackageManager(Protocol):
 
     async def list_unused(
         self, target: TargetRepo, workspace: Path
-    ) -> tuple[Removal, ...]:
-        """Report each unused direct dependency — the dead-code signal.
+    ) -> tuple[Removal | DeadFile | DeadExport, ...]:
+        """Report the dead code a static analyzer flags — the dead-code signal.
 
-        Runs a static analyzer over the checkout (npm via ``knip``): no install,
-        no project or dependency code executed. Best-effort and conservative — a
-        tool that errors or finds nothing yields no removals, never a raise, so
-        a flaky signal never blocks the loop. Each result is a raw flag
+        Runs over the checkout (npm via ``knip``): no install, no project or
+        dependency code executed. Surfaces three shapes of dead weight: an
+        unused dependency (:class:`Removal`), a whole unused file
+        (:class:`DeadFile`), and an export no other module imports
+        (:class:`DeadExport`). An ecosystem with no source analyzer (uv via
+        ``deptry``) reports only removals. Best-effort and conservative — a tool
+        that errors or finds nothing yields nothing, never a raise, so a flaky
+        signal never blocks the loop. Each result is a raw flag
         (``justification`` names the detector); the loop's safe-to-remove judge
         vetoes each before any PR is opened.
 
@@ -85,7 +89,7 @@ class PackageManager(Protocol):
         installed (uv via ``deptry``) runs that install + analysis in a sandbox
         the adapter holds (an external e2b microVM) — the worker itself still
         never installs a target's dependencies. With no sandbox configured (no
-        ``FROOT_E2B_API_KEY``) the signal degrades to no removals.
+        ``FROOT_E2B_API_KEY``) the signal degrades to nothing.
         """
         ...
 
