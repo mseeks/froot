@@ -147,11 +147,14 @@ class.
 ## The build arc
 
 1. **Mechanical repair loops** — dependency-patch ✓, security-patch ✓, and
-   **dead-code** (unused dependencies): npm via `knip` ✓ — static analysis, no
-   install, so it fits the clone-only worker. The uv arm (`deptry`) ✓ — it runs
-   `uv sync` + `deptry` in an external e2b microVM (the deps must be installed),
-   the sandbox above. A safe-to-remove judge vetoes *at the signal* (a tool used
-   without an import never becomes a PR), and CI stays the oracle.
+   **dead-code** (unused dependencies, whole unused files, and unused exports):
+   npm via `knip` ✓ — static analysis, no install, so it fits the clone-only
+   worker, and the file/export arms are froot's first edits to *source* (a file
+   deleted, an `export` stripped in place). The uv arm (`deptry`, deps only) ✓ —
+   it runs `uv sync` + `deptry` in an external e2b microVM (the deps must be
+   installed), the sandbox above. A safe-to-remove judge vetoes *at the signal*
+   (a tool used without an import, a framework entry loaded by convention, never
+   becomes a PR), and CI stays the oracle.
 2. **The enum → loop-registry refactor** — the moment froot stops being "a few
    loops" and becomes "the chassis you plug loops into."
 3. **Fabrication loops** — ordered by oracle strength (test-backfill, flaky-fix

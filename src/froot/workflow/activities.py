@@ -26,6 +26,7 @@ from froot.domain.changelog import (
     UnknownVerdict,
 )
 from froot.domain.ci import CIStatus
+from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
 from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
@@ -38,10 +39,13 @@ from froot.policy.a11y_comment import (
 )
 from froot.policy.a11y_scan import scan_sources
 from froot.policy.compose import (
+    dead_export_pull_request_draft,
+    dead_file_pull_request_draft,
     pr_labels,
     pull_request_draft,
     removal_pull_request_draft,
 )
+from froot.policy.dead_source import unexport_line
 from froot.policy.determinism import analyze_workflow_surface
 from froot.policy.naming import (
     branch_name,
@@ -119,7 +123,50 @@ def _draft_for(params: OpenPrInput) -> PullRequestDraft:
             return removal_pull_request_draft(
                 params.target, item, params.loop, title_prefix=title_prefix
             )
+        case DeadFile():
+            return dead_file_pull_request_draft(
+                params.target, item, params.loop, title_prefix=title_prefix
+            )
+        case DeadExport():
+            return dead_export_pull_request_draft(
+                params.target, item, params.loop, title_prefix=title_prefix
+            )
     assert_never(item)
+
+
+def _delete_dead_file(base: Path, item: DeadFile) -> None:
+    """Delete the unused file from the checkout (``push_branch`` stages it).
+
+    Resolved against ``base`` — the manifest dir the analyzer ran in, so the
+    path matches what the signal flagged. A missing file raises (the same
+    fail-loud as the bump action), never a silent no-op PR.
+    """
+    (base / item.path).unlink()
+
+
+def _apply_dead_export(base: Path, item: DeadExport) -> None:
+    """Strip the unused ``export`` from the file at the analyzer's line.
+
+    Re-validates the line still declares ``symbol`` via the same pure transform
+    the signal narrowed with (:func:`~froot.policy.dead_source.unexport_line`);
+    a mismatch — the source drifted under the signal — raises rather than push
+    an empty diff, so the loop never opens a no-op PR.
+    """
+    path = base / item.file
+    lines = path.read_text().split("\n")
+    index = item.line - 1
+    if not 0 <= index < len(lines):
+        msg = f"{item.file}:{item.line} out of range for {item.symbol!r}"
+        raise RuntimeError(msg)
+    rewritten = unexport_line(lines[index], item.symbol)
+    if rewritten is None:
+        msg = (
+            f"{item.file}:{item.line} is no longer an un-exportable "
+            f"declaration of {item.symbol!r}"
+        )
+        raise RuntimeError(msg)
+    lines[index] = rewritten
+    path.write_text("\n".join(lines))
 
 
 async def _select_candidates(
@@ -220,10 +267,11 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     from froot.adapters.model_judge import PydanticAiJudge
 
     candidate = params.candidate
-    if isinstance(candidate, Removal):
-        # A removal already cleared the safe-to-remove veto at scan; there is no
-        # changelog to read, so carry that conclusion straight into the PR
-        # framing (the rationale the veto recorded on the work item).
+    if isinstance(candidate, Removal | DeadFile | DeadExport):
+        # A signal-judged kind (removal / dead file / dead export) already
+        # cleared its safe-to-remove veto at scan; there is no changelog to
+        # read, so carry that conclusion straight into the PR framing (the
+        # rationale the veto recorded on the work item).
         return CleanVerdict(
             rationale=candidate.justification or "unused; safe to remove"
         )
@@ -235,7 +283,7 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     except Exception as exc:
         activity.logger.warning(
             "changelog judge unavailable for %s; degrading to unknown: %r",
-            params.candidate.package,
+            params.candidate.subject,
             exc,
         )
         return UnknownVerdict(
@@ -269,12 +317,29 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
         except Exception as exc:
             activity.logger.warning(
                 "safe-to-remove gate review unavailable for %s; holding: %r",
-                candidate.package,
+                candidate.subject,
                 exc,
             )
             verdict = UnknownVerdict(
                 rationale=(
                     f"Removal reviewer unavailable ({type(exc).__name__})."
+                )
+            )
+    elif isinstance(candidate, DeadFile | DeadExport):
+        # The fourth leg for a dead file / unused export: independently re-judge
+        # the delete / un-export is safe (the scan veto's check). No changelog
+        # to read; fail-CLOSED to a hold on a model error, like the bump path.
+        try:
+            verdict = await PydanticAiJudge().judge_dead_source(candidate)
+        except Exception as exc:
+            activity.logger.warning(
+                "dead-source gate review unavailable for %s; holding: %r",
+                candidate.subject,
+                exc,
+            )
+            verdict = UnknownVerdict(
+                rationale=(
+                    f"Dead-source reviewer unavailable ({type(exc).__name__})."
                 )
             )
     else:
@@ -306,7 +371,7 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
                 "loop": params.loop.value,
                 "pr": params.pr.number,
                 "pr_url": params.pr.url,
-                "package": params.candidate.package,
+                "package": params.candidate.subject,
                 "verdict": verdict.kind,
                 "approved": verdict.kind == "clean",
             }
@@ -317,12 +382,14 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
 
 @activity.defn
 async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
-    """Rewrite the manifest+lockfile and open (idempotently) the work item's PR.
+    """Apply the work item's edit and open (idempotently) its PR.
 
     The one place the action differs by work-item kind: a bump regenerates the
-    lockfile at the target version, a removal deletes the dependency. Both are
-    lockfile-only (no install, no scripts); everything around them — the dedup
-    branch, the checkout, the push, the open — is the same chassis.
+    lockfile at the target version; a removal deletes a dependency (both
+    lockfile-only, no install or scripts); a dead file is deleted whole; a dead
+    export is stripped of its ``export``. Everything else (the dedup branch, the
+    checkout, the push, the open) is the same chassis, and CI is the oracle for
+    every kind.
     """
     from froot.adapters.github import GitHubForge
     from froot.adapters.registry import package_manager_for
@@ -344,6 +411,10 @@ async def open_pull_request(params: OpenPrInput) -> PullRequestRef:
                 await package_manager.apply_patch_bump(item, manifest_dir)
             case Removal():
                 await package_manager.remove_dependency(item, manifest_dir)
+            case DeadFile():
+                _delete_dead_file(manifest_dir, item)
+            case DeadExport():
+                _apply_dead_export(manifest_dir, item)
         await forge.push_branch(workspace, branch, draft.title)
     return await forge.open_pull_request(params.target, draft)
 
@@ -379,7 +450,7 @@ async def record_outcome(params: RecordInput) -> None:
         "event": "loop_outcome",
         "loop": params.loop.value,
         "repo": params.target.repo.slug,
-        "package": item.package,
+        "package": item.subject,
         "changelog": outcome.verdict.kind,
         "ci": outcome.ci.kind,
         "ci_passed": outcome.ci_passed,
@@ -395,6 +466,14 @@ async def record_outcome(params: RecordInput) -> None:
             }
         case Removal():
             record |= {"action": "remove", "dev": item.dev}
+        case DeadFile():
+            record |= {"action": "remove_file", "path": item.path}
+        case DeadExport():
+            record |= {
+                "action": "unexport",
+                "file": item.file,
+                "symbol": item.symbol,
+            }
     _log.info(json.dumps(record))
 
 

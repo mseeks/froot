@@ -41,6 +41,11 @@ class Removal(Frozen):
     dev: bool = False
     justification: str | None = None
 
+    @property
+    def subject(self) -> str:
+        """The work item's human-readable identifier (its package)."""
+        return self.package
+
     def __str__(self) -> str:
         """Render as ``remove package (unused)``."""
         return f"remove {self.package} (unused)"

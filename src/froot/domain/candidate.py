@@ -64,6 +64,11 @@ class Candidate(Frozen):
             )
         return self
 
+    @property
+    def subject(self) -> str:
+        """The work item's human-readable identifier (its package)."""
+        return self.package
+
     def __str__(self) -> str:
         """Render as ``package current -> target``."""
         return f"{self.package} {self.current} -> {self.target}"

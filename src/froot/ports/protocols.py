@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     )
     from froot.domain.changelog import Changelog, ChangelogVerdict
     from froot.domain.ci import CIStatus
+    from froot.domain.dead_source import DeadExport, DeadFile
     from froot.domain.loop import Loop
     from froot.domain.pull_request import (
         BranchName,
@@ -70,13 +71,17 @@ class PackageManager(Protocol):
 
     async def list_unused(
         self, target: TargetRepo, workspace: Path
-    ) -> tuple[Removal, ...]:
-        """Report each unused direct dependency — the dead-code signal.
+    ) -> tuple[Removal | DeadFile | DeadExport, ...]:
+        """Report the dead code a static analyzer flags — the dead-code signal.
 
-        Runs a static analyzer over the checkout (npm via ``knip``): no install,
-        no project or dependency code executed. Best-effort and conservative — a
-        tool that errors or finds nothing yields no removals, never a raise, so
-        a flaky signal never blocks the loop. Each result is a raw flag
+        Runs over the checkout (npm via ``knip``): no install, no project or
+        dependency code executed. Surfaces three shapes of dead weight: an
+        unused dependency (:class:`Removal`), a whole unused file
+        (:class:`DeadFile`), and an export no other module imports
+        (:class:`DeadExport`). An ecosystem with no source analyzer (uv via
+        ``deptry``) reports only removals. Best-effort and conservative — a tool
+        that errors or finds nothing yields nothing, never a raise, so a flaky
+        signal never blocks the loop. Each result is a raw flag
         (``justification`` names the detector); the loop's safe-to-remove judge
         vetoes each before any PR is opened.
 
@@ -84,7 +89,7 @@ class PackageManager(Protocol):
         installed (uv via ``deptry``) runs that install + analysis in a sandbox
         the adapter holds (an external e2b microVM) — the worker itself still
         never installs a target's dependencies. With no sandbox configured (no
-        ``FROOT_E2B_API_KEY``) the signal degrades to no removals.
+        ``FROOT_E2B_API_KEY``) the signal degrades to nothing.
         """
         ...
 
@@ -280,6 +285,19 @@ class ModelJudge(Protocol):
         safe to remove (the loop proposes it); ``risky``/``unknown`` hold it
         back, so a tool used without an import (pytest, eslint) never becomes a
         noisy PR. Same verdict shape as :meth:`judge`, a different prompt.
+        """
+        ...
+
+    async def judge_dead_source(
+        self, item: DeadFile | DeadExport
+    ) -> ChangelogVerdict:
+        """Assess whether deleting a file / un-exporting a symbol is safe.
+
+        The source arm of the dead-code veto: ``clean`` proposes the deletion or
+        un-export; ``risky``/``unknown`` hold it. "Not imported" misses code a
+        framework loads by convention (routes, pages, plugins), dynamic imports,
+        and a published library's public API — this judge vetoes those, the same
+        veto-at-the-signal shape as :meth:`judge_removal`, a different prompt.
         """
         ...
 

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
     from froot.domain.changelog import Changelog, ChangelogVerdict
+    from froot.domain.dead_source import DeadExport, DeadFile
     from froot.domain.removal import Removal
 
 _SYSTEM_PROMPT = (
@@ -87,6 +88,32 @@ _REMOVAL_SYSTEM_PROMPT = (
     "dynamically or via config. Say which. This holds it back (no PR).\n"
     "- unknown: you cannot tell. This holds it back.\n"
     "CI is the final check, but a wrong removal wastes a human's time, so when "
+    "in doubt do NOT return clean. Keep the rationale to one or two sentences."
+)
+
+
+# The dead-code loop's source arm: a static analyzer flagged a file as imported
+# by nothing, or an export as imported by no other module. As with deps, "not
+# imported" is not "dead": frameworks load files by convention (route/page/
+# plugin files), dynamic imports and config reference code by string, and a
+# published library's exports are its public API even when nothing in-repo uses
+# them. This judge vetoes those; CI is still the final oracle.
+_DEAD_SOURCE_SYSTEM_PROMPT = (
+    "You decide whether a piece of dead source is safe to remove, for a "
+    "code-maintenance bot. A static analyzer flagged either a FILE that no "
+    "module imports, or an EXPORT that no other module imports (which the bot "
+    "would un-export, leaving it module-private). 'Not imported' is not always "
+    "'dead'.\n"
+    "Return one verdict:\n"
+    "- clean: ordinary internal code that, if genuinely unreferenced, the "
+    "project no longer needs — safe to delete the file / un-export the symbol. "
+    "This proposes the change.\n"
+    "- risky: plausibly used WITHOUT a static import: a framework entry "
+    "loaded by convention (a route, page, or plugin file), code imported "
+    "dynamically or named in config, a test fixture, or the public API of a "
+    "published library. Say which. This holds it back (no PR).\n"
+    "- unknown: you cannot tell. This holds it back.\n"
+    "CI is the final check, but a wrong change wastes a human's time, so when "
     "in doubt do NOT return clean. Keep the rationale to one or two sentences."
 )
 
@@ -157,6 +184,24 @@ def _removal_prompt(removal: Removal) -> str:
     )
 
 
+def _dead_source_prompt(item: DeadFile | DeadExport) -> str:
+    """The user prompt for the dead-source judge: the flagged file/export."""
+    note = item.justification or "flagged as unused"
+    if item.kind == "dead_file":
+        return (
+            f"Unused FILE: {item.path}\n"
+            f"Ecosystem: {item.ecosystem.value}\n"
+            f"Detector note: {note}\n"
+            "Is it safe to delete this file?"
+        )
+    return (
+        f"Unused EXPORT: {item.symbol} (in {item.file})\n"
+        f"Ecosystem: {item.ecosystem.value}\n"
+        f"Detector note: {note}\n"
+        "Is it safe to un-export this symbol (leave it module-private)?"
+    )
+
+
 class PydanticAiJudge:
     """A :class:`~froot.ports.protocols.ModelJudge` backed by Pydantic AI.
 
@@ -192,6 +237,13 @@ class PydanticAiJudge:
             output_type=_Assessment,
             system_prompt=_REMOVAL_SYSTEM_PROMPT,
         )
+        # The dead-code loop's source veto (dead files + unused exports); the
+        # neutral model, its own prompt. Also a veto (clean = propose).
+        self._dead_source_agent: Agent[None, _Assessment] = Agent(
+            model or build_model(),
+            output_type=_Assessment,
+            system_prompt=_DEAD_SOURCE_SYSTEM_PROMPT,
+        )
 
     async def judge(
         self, changelog: Changelog, loop: Loop = Loop.DEPENDENCY_PATCH
@@ -215,4 +267,16 @@ class PydanticAiJudge:
         judge, a different prompt.
         """
         result = await self._removal_agent.run(_removal_prompt(removal))
+        return assessment_to_verdict(result.output)
+
+    async def judge_dead_source(
+        self, item: DeadFile | DeadExport
+    ) -> ChangelogVerdict:
+        """Assess whether a dead file / unused export is safe to act on.
+
+        The dead-code loop's source veto: ``clean`` lets the deletion (file) or
+        un-export (symbol) become a PR; any other verdict holds it. Same
+        ``_Assessment`` shape as :meth:`judge_removal`, a different prompt.
+        """
+        result = await self._dead_source_agent.run(_dead_source_prompt(item))
         return assessment_to_verdict(result.output)

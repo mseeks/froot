@@ -223,12 +223,16 @@ Staged, deliberately ([MHE §3.4][mhe]). Each stage earns the next.
 1. **✓ Close one loop.** dependency-patch, end-to-end, on one target repo. The template. *Done.*
 2. **✓ Replicate.** security-patch — the same chassis, a sharper signal, an objective vuln-delta.
    Proves the template is a template. *Done.*
-3. **✓ Widen the work item.** dead-code (unused dependencies) — the first loop whose action edits
-   *source*, not just a manifest, and the first to carry a non-bump work item (a `Removal`) through
-   the same spine. A safe-to-remove judge vetoes *at the signal*; CI stays the oracle. npm via
-   `knip` (static, no install) *done*; the uv arm (`deptry`) *done* — it runs `uv sync` + `deptry`
-   in an external e2b microVM (the sandbox where the target's deps can be installed; see
-   [VISION.md](./VISION.md)), degrading to no-op when no e2b key is set.
+3. **✓ Widen the work item.** dead-code — the first loop to carry non-bump work items through the
+   same spine, and the first whose action edits *source*. It spans three shapes of dead weight: an
+   unused **dependency** (a `Removal` — manifest+lockfile edit), a whole unused **file** (a `DeadFile`
+   — deleted), and an unused **export** (a `DeadExport` — un-exported in place, since knip flags
+   "needn't be exported", not "dead everywhere"). The last two are froot's first genuine source
+   edits. A safe-to-remove judge vetoes each *at the signal*; CI stays the oracle. npm via `knip`
+   (static, no install) surfaces all three *done*; the uv arm (`deptry`, deps only) *done* — it runs
+   `uv sync` + `deptry` in an external e2b microVM (the sandbox where the target's deps can be
+   installed; see [VISION.md](./VISION.md)), degrading to no-op when no e2b key is set. (Dead Python
+   *source* — e.g. `vulture` — is a later arm.)
 4. **✓ Earn autonomy.** The acting gate: a class auto-merges its clean+green bumps once it clears
    four independent bearings (approval rate, post-merge defect rate, an adversarial gate
    self-test, an independent deep review) on an allowlisted repo. *Done — off by default until a

@@ -13,6 +13,7 @@ import re
 from typing import TYPE_CHECKING, assert_never
 
 from froot.domain.candidate import Candidate
+from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.loop import Loop
 from froot.domain.pull_request import BranchName
 from froot.domain.removal import Removal
@@ -37,6 +38,10 @@ def _branch_tail(item: WorkItem) -> str:
             return f"{_slug(item.package)}-{item.target}"
         case Removal():
             return f"{_slug(item.package)}-unused"
+        case DeadFile():
+            return f"{_slug(item.path)}-file"
+        case DeadExport():
+            return f"{_slug(item.file)}-{_slug(item.symbol)}-export"
     assert_never(item)
 
 
@@ -57,7 +62,8 @@ def branch_name(
 
     Namespaced by loop (``froot/<loop>/…``) so two loops never push the same
     branch even when they touch the same package; a bump's tail is
-    ``<pkg>-<target>``, a removal's is ``<pkg>-unused``.
+    ``<pkg>-<target>``, a removal's ``<pkg>-unused``, a dead file's
+    ``<path>-file``, a dead export's ``<file>-<symbol>-export``.
     """
     return BranchName(value=f"froot/{loop.value}/{_branch_tail(item)}")
 
@@ -85,11 +91,16 @@ def bump_workflow_id(
     running dependency-patch loop is never orphaned on deploy); a removal uses
     ``…-<pkg>-unused``.
     """
+    tail: tuple[str, ...]
     match item:
         case Candidate():
             tail = (_slug(item.package), _slug(str(item.target)))
         case Removal():
             tail = (_slug(item.package), "unused")
+        case DeadFile():
+            tail = (_slug(item.path), "file")
+        case DeadExport():
+            tail = (_slug(item.file), _slug(item.symbol), "export")
         case _:
             assert_never(item)
     return "-".join(
