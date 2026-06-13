@@ -137,6 +137,23 @@ class WorkerSettings(BaseSettings):
     max_concurrent_activities: int = Field(default=4, ge=1)
 
 
+class NtfySettings(BaseSettings):
+    """ntfy alert channel for loop-health notifications (``FROOT_*``).
+
+    The liveness watchdog posts here when it revives a dead loop. An empty topic
+    (the default) disables alerts — the watchdog still restarts, it just stays
+    quiet. The topic is a capability: anyone who knows it can read and post, so
+    treat it like a secret in the deployment.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_", env_file=".env", extra="ignore", frozen=True
+    )
+
+    ntfy_topic: str = ""
+    ntfy_url: str = Field(default="https://ntfy.sh", min_length=1)
+
+
 class GitHubSettings(BaseSettings):
     """GitHub credentials, from ``FROOT_GITHUB_TOKEN``.
 
