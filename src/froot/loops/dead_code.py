@@ -12,6 +12,7 @@ Disposition: commit — the spine opens a PR and gates the merge (CI is oracle).
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from temporalio import activity
@@ -23,9 +24,17 @@ from froot.loops.registry import CommitTail, LoopSpec, register
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from froot.domain.dead_source import DeadExport, DeadFile
     from froot.domain.repo import TargetRepo
     from froot.domain.work import WorkItem
     from froot.ports.protocols import PackageManager
+
+
+# Vet up to this many items at once. The local Ollama serves ~4 concurrent
+# calls, so a large dead-code backlog's safe-to-remove judgments overlap instead
+# of serializing: a repo with ~70 flagged items at ~30s/judgment would otherwise
+# run ~35 min sequentially and trip the scan activity's ceiling.
+_JUDGE_CONCURRENCY = 4
 
 
 async def observe(
@@ -48,22 +57,26 @@ async def observe(
     if not flagged:
         return 0, ()
     judge = PydanticAiJudge()
-    kept: list[WorkItem] = []
-    for item in flagged:
-        try:
-            if isinstance(item, Removal):
-                verdict = await judge.judge_removal(item)
-            else:
-                verdict = await judge.judge_dead_source(item)
-        except Exception as exc:
-            activity.logger.warning(
-                "safe-to-remove judge unavailable for %s; skipping: %r",
-                item.subject,
-                exc,
-            )
-            continue
+    gate = asyncio.Semaphore(_JUDGE_CONCURRENCY)
+
+    async def _vet(item: Removal | DeadFile | DeadExport) -> WorkItem | None:
+        """Judged clean -> enriched item; else ``None`` (fail-safe)."""
+        async with gate:
+            try:
+                verdict = (
+                    await judge.judge_removal(item)
+                    if isinstance(item, Removal)
+                    else await judge.judge_dead_source(item)
+                )
+            except Exception as exc:
+                activity.logger.warning(
+                    "safe-to-remove judge unavailable for %s; skipping: %r",
+                    item.subject,
+                    exc,
+                )
+                return None
         if verdict.kind != "clean":
-            continue
+            return None
         # Carry the judge's reasoning into the work item so the PR body explains
         # why the change is safe, beside the detector note.
         enriched = (
@@ -71,8 +84,14 @@ async def observe(
             if item.justification
             else verdict.rationale
         )
-        kept.append(item.model_copy(update={"justification": enriched}))
-    return len(flagged), tuple(kept)
+        return item.model_copy(update={"justification": enriched})
+
+    # Fan out under the semaphore; gather preserves the flagged order.
+    vetted: list[WorkItem | None] = await asyncio.gather(
+        *(_vet(item) for item in flagged)
+    )
+    kept = tuple(item for item in vetted if item is not None)
+    return len(flagged), kept
 
 
 register(
