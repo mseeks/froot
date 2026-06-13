@@ -11,6 +11,7 @@ from froot.config.settings import (
     Settings,
     TelemetrySettings,
     TemporalSettings,
+    WorkerSettings,
 )
 from froot.domain.ecosystem import Ecosystem
 
@@ -219,3 +220,21 @@ def test_autonomy_rejects_rate_above_one(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FROOT_AUTOMERGE_MIN_RATE", "1.5")
     with pytest.raises(ValidationError):
         AutonomySettings()
+
+
+def test_worker_concurrency_defaults_to_four(monkeypatch: pytest.MonkeyPatch):
+    # Matches Ollama's 4 concurrent calls, so independent loops adjudicate in
+    # parallel rather than serializing behind one in-flight model call.
+    monkeypatch.delenv("FROOT_MAX_CONCURRENT_ACTIVITIES", raising=False)
+    assert WorkerSettings().max_concurrent_activities == 4
+
+
+def test_worker_concurrency_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_MAX_CONCURRENT_ACTIVITIES", "2")
+    assert WorkerSettings().max_concurrent_activities == 2
+
+
+def test_worker_concurrency_rejects_below_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FROOT_MAX_CONCURRENT_ACTIVITIES", "0")
+    with pytest.raises(ValidationError):
+        WorkerSettings()

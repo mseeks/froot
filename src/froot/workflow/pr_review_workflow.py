@@ -22,6 +22,8 @@ with workflow.unsafe.imports_passed_through():
     from froot.workflow.constants import (
         ACTIVITY_TIMEOUT,
         CI_CHECK_TIMEOUT,
+        HEARTBEAT_TIMEOUT,
+        MODEL_ACTIVITY_TIMEOUT,
         TOOL_RETRY,
     )
     from froot.workflow.types import (
@@ -49,7 +51,8 @@ class PrReviewWorkflow:
             verdicts = await workflow.execute_activity(
                 activities.adjudicate_frontier,
                 AdjudicateInput(frontier=analysis.frontier),
-                start_to_close_timeout=ACTIVITY_TIMEOUT,
+                start_to_close_timeout=MODEL_ACTIVITY_TIMEOUT,
+                heartbeat_timeout=HEARTBEAT_TIMEOUT,
                 retry_policy=TOOL_RETRY,
             )
         findings = synthesize_findings(

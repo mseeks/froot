@@ -30,13 +30,12 @@ from froot.adapters.telemetry import (
     shutdown_tracing,
     tracing_interceptors,
 )
-from froot.config.settings import DashboardSettings, TemporalSettings
+from froot.config.settings import (
+    DashboardSettings,
+    TemporalSettings,
+    WorkerSettings,
+)
 from froot.workflow.runtime import ALL_ACTIVITIES, DATA_CONVERTER, WORKFLOWS
-
-# Process one activity at a time: the model judge calls a single local Gemma
-# (which serializes anyway), and the household/hobby volume never needs more.
-# The durable CI wait sleeps between polls, so it does not hold this slot.
-_MAX_CONCURRENT_ACTIVITIES = 1
 
 
 def configure_logging() -> None:
@@ -90,12 +89,16 @@ async def run_worker(
         interceptors=tracing_interceptors(),
         runtime=metrics_runtime(),
     )
+    # Run several activities concurrently (default 4, env-configurable) so
+    # independent loops' model adjudications overlap instead of serializing
+    # behind one in-flight call; the local Gemma now serves them concurrently.
+    # The durable CI wait is a workflow timer, so a bump on CI holds no slot.
     worker = Worker(
         client,
         task_queue=queue,
         workflows=WORKFLOWS,
         activities=ALL_ACTIVITIES,
-        max_concurrent_activities=_MAX_CONCURRENT_ACTIVITIES,
+        max_concurrent_activities=WorkerSettings().max_concurrent_activities,
     )
     # Run until SIGTERM/SIGINT, then shut down gracefully and flush telemetry
     # (atexit does NOT run on an unhandled signal, so the last span batch would

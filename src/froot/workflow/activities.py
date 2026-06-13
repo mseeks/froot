@@ -10,6 +10,8 @@ data converter, so the domain imports here are deliberately not deferred.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import tempfile
@@ -60,6 +62,7 @@ from froot.policy.review_comment import (
 from froot.policy.review_comment import (
     should_post as should_post_review,
 )
+from froot.workflow.constants import HEARTBEAT_INTERVAL
 from froot.workflow.types import (
     AdjudicateA11yInput,
     AdjudicateInput,
@@ -84,6 +87,9 @@ from froot.workflow.types import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+    from datetime import timedelta
+
     from froot.domain.loop import Loop
     from froot.ports.protocols import PackageManager
 
@@ -93,6 +99,35 @@ _a11y_log = logging.getLogger("froot.a11y")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
 _gate_log = logging.getLogger("froot.gate")
+
+
+async def beating[T](
+    awaitable: Awaitable[T], *, interval: timedelta = HEARTBEAT_INTERVAL
+) -> T:
+    """Await ``awaitable`` while emitting Temporal activity heartbeats.
+
+    A model call is a single multi-minute await with no natural point to
+    report liveness, and the adjudicators make several back to back. A
+    background ticker heartbeats on the activity's behalf, so a hung worker
+    trips the (short) heartbeat timeout instead of running out the (long)
+    start-to-close ceiling. Outside an activity context — unit tests await an
+    activity body directly — the heartbeat is skipped, so this stays a
+    transparent passthrough.
+    """
+
+    async def _tick() -> None:
+        while True:
+            await asyncio.sleep(interval.total_seconds())
+            if activity.in_activity():
+                activity.heartbeat()
+
+    ticker = asyncio.create_task(_tick())
+    try:
+        return await awaitable
+    finally:
+        ticker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ticker
 
 
 def _manifest_dir(target: TargetRepo, workspace: Path) -> Path:
@@ -219,12 +254,14 @@ async def scan_candidates(
     package_manager = package_manager_for(params.target.ecosystem)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
-        await forge.checkout(params.target, workspace)
-        considered, candidates = await _select_candidates(
-            params.loop,
-            params.target,
-            package_manager,
-            _manifest_dir(params.target, workspace),
+        await beating(forge.checkout(params.target, workspace))
+        considered, candidates = await beating(
+            _select_candidates(
+                params.loop,
+                params.target,
+                package_manager,
+                _manifest_dir(params.target, workspace),
+            )
         )
     selected = len(candidates)
     dropped = max(considered - selected, 0)
@@ -279,7 +316,7 @@ async def judge_changelog(params: JudgeInput) -> ChangelogVerdict:
     if changelog is None:
         return UnknownVerdict(rationale="No changelog could be fetched.")
     try:
-        return await PydanticAiJudge().judge(changelog, params.loop)
+        return await beating(PydanticAiJudge().judge(changelog, params.loop))
     except Exception as exc:
         activity.logger.warning(
             "changelog judge unavailable for %s; degrading to unknown: %r",
@@ -313,7 +350,7 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
         # to remove (the same check the scan veto ran). No changelog to read;
         # fail-CLOSED to a hold on a model error, like the bump path.
         try:
-            verdict = await PydanticAiJudge().judge_removal(candidate)
+            verdict = await beating(PydanticAiJudge().judge_removal(candidate))
         except Exception as exc:
             activity.logger.warning(
                 "safe-to-remove gate review unavailable for %s; holding: %r",
@@ -330,7 +367,9 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
         # the delete / un-export is safe (the scan veto's check). No changelog
         # to read; fail-CLOSED to a hold on a model error, like the bump path.
         try:
-            verdict = await PydanticAiJudge().judge_dead_source(candidate)
+            verdict = await beating(
+                PydanticAiJudge().judge_dead_source(candidate)
+            )
         except Exception as exc:
             activity.logger.warning(
                 "dead-source gate review unavailable for %s; holding: %r",
@@ -350,8 +389,8 @@ async def gate_review(params: GateReviewInput) -> ChangelogVerdict:
             )
         else:
             try:
-                verdict = await PydanticAiJudge().gate_review(
-                    changelog, params.loop
+                verdict = await beating(
+                    PydanticAiJudge().gate_review(changelog, params.loop)
                 )
             except Exception as exc:
                 activity.logger.warning(
@@ -779,7 +818,7 @@ async def adjudicate_frontier(
     judge = DeterminismFrontierJudge()
     verdicts: list[FrontierVerdict] = []
     for item in params.frontier:
-        verdicts.append(await judge.adjudicate(item))
+        verdicts.append(await beating(judge.adjudicate(item)))
     return tuple(verdicts)
 
 
@@ -859,7 +898,7 @@ async def adjudicate_a11y(
     judge = A11ySourceJudge()
     verdicts: list[A11yVerdict] = []
     for candidate in params.candidates:
-        verdicts.append(await judge.adjudicate(candidate))
+        verdicts.append(await beating(judge.adjudicate(candidate)))
     return tuple(verdicts)
 
 

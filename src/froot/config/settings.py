@@ -120,6 +120,23 @@ class TemporalSettings(BaseSettings):
     task_queue: str = Field(default="froot", min_length=1)
 
 
+class WorkerSettings(BaseSettings):
+    """Worker runtime tuning (``FROOT_*``).
+
+    ``max_concurrent_activities`` caps how many activities the worker runs at
+    once. The model judge calls a local Ollama; matching this to Ollama's own
+    concurrency lets independent loops adjudicate in parallel instead of
+    serializing behind a single in-flight call. The durable CI wait is a
+    workflow timer, so it never holds an activity slot.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_", env_file=".env", extra="ignore", frozen=True
+    )
+
+    max_concurrent_activities: int = Field(default=4, ge=1)
+
+
 class GitHubSettings(BaseSettings):
     """GitHub credentials, from ``FROOT_GITHUB_TOKEN``.
 

@@ -22,6 +22,8 @@ with workflow.unsafe.imports_passed_through():
     from froot.workflow.constants import (
         ACTIVITY_TIMEOUT,
         DISPATCH_TIMEOUT,
+        HEARTBEAT_TIMEOUT,
+        MODEL_ACTIVITY_TIMEOUT,
         TOOL_RETRY,
     )
     from froot.workflow.types import (
@@ -44,7 +46,8 @@ class ScanWorkflow:
         candidates = await workflow.execute_activity(
             activities.scan_candidates,
             ScanCandidatesInput(target=params.target, loop=params.loop),
-            start_to_close_timeout=ACTIVITY_TIMEOUT,
+            start_to_close_timeout=MODEL_ACTIVITY_TIMEOUT,
+            heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=TOOL_RETRY,
         )
         for candidate in candidates:

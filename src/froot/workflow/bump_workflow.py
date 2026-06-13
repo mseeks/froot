@@ -47,6 +47,8 @@ with workflow.unsafe.imports_passed_through():
         CI_CHECK_TIMEOUT,
         CI_POLL_INTERVAL,
         CI_WAIT_DEADLINE,
+        HEARTBEAT_TIMEOUT,
+        MODEL_ACTIVITY_TIMEOUT,
         TOOL_RETRY,
     )
     from froot.workflow.types import (
@@ -131,7 +133,8 @@ class BumpWorkflow:
                 verdict = await workflow.execute_activity(
                     activities.judge_changelog,
                     JudgeInput(candidate=effect.candidate, loop=loop),
-                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    start_to_close_timeout=MODEL_ACTIVITY_TIMEOUT,
+                    heartbeat_timeout=HEARTBEAT_TIMEOUT,
                     retry_policy=TOOL_RETRY,
                 )
                 return ChangelogJudged(verdict=verdict)
@@ -170,7 +173,8 @@ class BumpWorkflow:
                     GateReviewInput(
                         candidate=effect.candidate, pr=effect.pr, loop=loop
                     ),
-                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    start_to_close_timeout=MODEL_ACTIVITY_TIMEOUT,
+                    heartbeat_timeout=HEARTBEAT_TIMEOUT,
                     retry_policy=TOOL_RETRY,
                 )
                 return GateReviewed(verdict=verdict)
