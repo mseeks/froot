@@ -138,21 +138,31 @@ def eval_alert(summary: EvalSummary) -> tuple[str, str] | None:
     return title, "\n".join(lines)
 
 
-# The golden set: realistic changelogs whose right reading is unambiguous. Three
-# clean (only fixes / docs / internal, no behavioral or API change) and three
-# risky (a behavioral change a reviewer must see, in two cases hidden behind a
-# patch — exactly what the dependency-patch judge is framed to catch). Balanced
-# so the two halves triangulate (see the module docstring). Grow it as the judge
-# earns more trust or a new loop adds a changelog framing.
+# The golden set: realistic changelogs whose right reading is unambiguous,
+# *calibrated against the live judge* — a fixture the healthy judge already
+# disagrees with would cry wolf daily, defeating the whole drift alarm. Three
+# clean and three risky, balanced so the two halves triangulate (module
+# docstring). Grow it by running a candidate against the live judge and keeping
+# only what the healthy judge classifies as intended (a new loop's framing, a
+# boundary worth pinning).
+#
+# Calibration note: this model (Gemma 4 12B) reads *any* functional change as
+# risky — even a bugfix whose notes say "no behavioral change", since a fix is a
+# behavior change. That conservatism is safe at the gate (it holds more for a
+# human to review), so a *clean* fixture must carry strictly NO code change:
+# docs, CI, packaging metadata, dev-dependency bumps, a message-string typo.
+# Don't pin the over-cautious direction (a code change the judge could
+# reasonably flag) as a clean expectation; the risky half carries the load.
 GOLDEN: tuple[EvalCase, ...] = (
     EvalCase(
-        name="patch-bugfix-no-api",
+        name="packaging-metadata-only",
         changelog=Changelog(
-            package="left-pad",
-            version=Version(major=1, minor=4, patch=3),
+            package="ms",
+            version=Version(major=2, minor=1, patch=4),
             text=(
-                "Fixed an off-by-one when the pad length equals the input "
-                "length. No API or behavioral changes."
+                "Corrected the repository URL and added `funding` and "
+                "`keywords` fields to package.json. No source or runtime "
+                "changes."
             ),
         ),
         expect_clean=True,
