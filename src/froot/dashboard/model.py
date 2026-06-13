@@ -41,6 +41,9 @@ class ScanLoop(Frozen):
         live: True when the loop is actively self-scheduling (running / CAN).
         last_tick: When the current scan execution started (≈ the last tick),
             or ``None`` if no scan workflow exists for the repo.
+        recent_failures: How many times this loop's root scan workflow has
+            terminally failed in the Temporal window — the flap count (0 for a
+            healthy loop; the watchdog revives each failure).
     """
 
     repo: str
@@ -48,6 +51,7 @@ class ScanLoop(Frozen):
     status: str
     live: bool
     last_tick: datetime | None
+    recent_failures: int = 0
 
 
 class BumpRow(Frozen):
@@ -337,12 +341,15 @@ class AdvisoryLoop(Frozen):
         live: True when the loop is actively self-scheduling.
         last_tick: When the current review execution started (≈ the last tick),
             or ``None`` if no review workflow exists for the repo.
+        recent_failures: How many times this loop's root review workflow has
+            terminally failed in the Temporal window — the flap count.
     """
 
     repo: str
     status: str
     live: bool
     last_tick: datetime | None
+    recent_failures: int = 0
 
 
 class AdvisoryRow(Frozen):
@@ -461,6 +468,28 @@ class LoopView(Frozen):
     failures: tuple[Failure, ...]
 
 
+class FlappingLoop(Frozen):
+    """A loop whose root workflow keeps terminally failing — needs a human.
+
+    Temporal self-heals transient failures and the watchdog revives terminal
+    ones, but a loop that fails *repeatedly* is a real problem the watchdog only
+    papers over (it also alerts via ntfy). This is the at-a-glance roll-up,
+    across the acting and advisory families alike.
+
+    Attributes:
+        repo: The ``owner/name`` slug.
+        loop: Which loop keeps failing.
+        failures: Terminal failures of its root workflow in the window (the flap
+            count) — at or above the flap threshold by construction.
+        live: Whether it is currently running again (revived) or still down.
+    """
+
+    repo: str
+    loop: str
+    failures: int
+    live: bool
+
+
 class DashboardModel(Frozen):
     """The whole 10,000ft view, fully derived and ready to render.
 
@@ -506,3 +535,6 @@ class DashboardModel(Frozen):
     advisory: tuple[AdvisoryView, ...]
     telemetry: RunTelemetry
     bump_loops: tuple[LoopView, ...] = ()
+    # Loops whose root workflow keeps terminally failing (the watchdog revives
+    # them and alerts via ntfy); empty when every loop is healthy.
+    flapping: tuple[FlappingLoop, ...] = ()

@@ -367,6 +367,20 @@ def _alive(model: DashboardModel) -> tuple[str, str]:
     return kind, f"{live}/{total} loops live"
 
 
+def _flapping_badge(model: DashboardModel) -> str:
+    """A header badge naming loops that keep failing, or '' when none do."""
+    if not model.flapping:
+        return ""
+    detail = ", ".join(
+        f"{f.loop} · {f.repo} ({f.failures}x)" for f in model.flapping
+    )
+    label = f"{len(model.flapping)} flapping"
+    return (
+        f'<span class="hstatus" title="{escape(detail)}">'
+        f"{_dot('bad')}{escape(label)}</span>"
+    )
+
+
 def _header(model: DashboardModel) -> str:
     kind, label = _alive(model)
     sources = "".join(
@@ -378,6 +392,7 @@ def _header(model: DashboardModel) -> str:
         "<header>"
         f"<h1>{_wordmark()}froot</h1>"
         f'<span class="hstatus">{_dot(kind)}{escape(label)}</span>'
+        f"{_flapping_badge(model)}"
         f'<span class="hmeta"><span class="srcs">{sources}</span>'
         '<button class="themetgl" type="button" onclick="__toggleTheme()"'
         ' title="Toggle light / dark"'

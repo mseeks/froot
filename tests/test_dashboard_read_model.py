@@ -1012,3 +1012,64 @@ def test_bump_loops_attribute_failures_by_workflow_id():
     assert len(by_loop["dependency-patch"].failures) == 1
     assert len(by_loop["security-patch"].failures) == 1
     assert "security-patch" in by_loop["security-patch"].failures[0].workflow_id
+
+
+def test_scan_loop_counts_recent_failures_across_executions():
+    # Two terminal failures then a revival: the count is every failure in the
+    # window, not just the latest execution's status.
+    scans = [
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 1, tzinfo=UTC),
+        ),
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="running",
+            start=datetime(2026, 6, 3, tzinfo=UTC),
+        ),
+    ]
+    row = _assemble([], scans, []).scan_loops[0]
+    assert row.recent_failures == 2
+    assert row.live is True  # latest execution is the revived, running one
+
+
+def test_repeatedly_failing_loop_is_flapping():
+    scans = [
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 1, tzinfo=UTC),
+        ),
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+    ]
+    flapping = _assemble([], scans, []).flapping
+    assert len(flapping) == 1
+    assert flapping[0].repo == REPO
+    assert flapping[0].loop == "dependency-patch"
+    assert flapping[0].failures == 2
+
+
+def test_single_failure_is_not_flapping():
+    scans = [
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 1, tzinfo=UTC),
+        ),
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="running",
+            start=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+    ]
+    assert _assemble([], scans, []).flapping == ()

@@ -22,6 +22,7 @@ from froot.dashboard.model import (
     ClassGate,
     DashboardModel,
     Failure,
+    FlappingLoop,
     Judgment,
     LoopView,
     Probes,
@@ -63,6 +64,10 @@ _LIVE_STATUSES = frozenset({"running", "continued_as_new"})
 # Every way a bump can end without closing cleanly — all belong in the honest
 # Failures panel, not silently dropped.
 _FAILURE_STATUSES = frozenset({"terminated", "failed", "canceled", "timed_out"})
+# A loop's root workflow failing once is a blip the watchdog revives silently;
+# failing at least this many times in the window is flapping — a real problem to
+# surface (and the watchdog alerts on it via ntfy).
+_FLAP_THRESHOLD = 2
 
 
 def _median(values: list[float]) -> float | None:
@@ -90,16 +95,27 @@ def _scan_loops(
     loops: tuple[Loop, ...],
     scans: tuple[ScanExecution, ...],
 ) -> tuple[ScanLoop, ...]:
-    """One liveness row per configured (repo, loop) (latest execution wins)."""
+    """One liveness row per configured (repo, loop) (latest execution wins).
+
+    ``recent_failures`` counts every terminal failure of the loop's root scan
+    workflow in the window (not just the latest), so a loop the watchdog keeps
+    reviving reads as flapping rather than as a single blip.
+    """
     by_id: dict[str, ScanExecution] = {}
+    fails_by_id: dict[str, int] = {}
     for scan in scans:
         current = by_id.get(scan.workflow_id)
         if current is None or _newer(scan.start, current.start):
             by_id[scan.workflow_id] = scan
+        if scan.status in _FAILURE_STATUSES:
+            fails_by_id[scan.workflow_id] = (
+                fails_by_id.get(scan.workflow_id, 0) + 1
+            )
     rows: list[ScanLoop] = []
     for loop in loops:
         for repo in repos:
             scan_id = _scan_id(repo, loop)
+            fails = fails_by_id.get(scan_id, 0) if scan_id is not None else 0
             execution = by_id.get(scan_id) if scan_id is not None else None
             if execution is None:
                 rows.append(
@@ -109,6 +125,7 @@ def _scan_loops(
                         status="none",
                         live=False,
                         last_tick=None,
+                        recent_failures=fails,
                     )
                 )
             else:
@@ -119,6 +136,7 @@ def _scan_loops(
                         status=execution.status,
                         live=execution.status in _LIVE_STATUSES,
                         last_tick=execution.start,
+                        recent_failures=fails,
                     )
                 )
     return tuple(rows)
@@ -631,12 +649,17 @@ def _advisory_loops(
     such loop is omitted rather than shown as a dead one.
     """
     by_id: dict[str, AdvisoryExecution] = {}
+    fails_by_id: dict[str, int] = {}
     for candidate in execs:
         if candidate.loop != loop:
             continue
         current = by_id.get(candidate.workflow_id)
         if current is None or _newer(candidate.start, current.start):
             by_id[candidate.workflow_id] = candidate
+        if candidate.status in _FAILURE_STATUSES:
+            fails_by_id[candidate.workflow_id] = (
+                fails_by_id.get(candidate.workflow_id, 0) + 1
+            )
     loops: list[AdvisoryLoop] = []
     for repo in repos:
         loop_id = _advisory_loop_id(loop, repo)
@@ -649,6 +672,9 @@ def _advisory_loops(
                 status=execution.status,
                 live=execution.status in _LIVE_STATUSES,
                 last_tick=execution.start,
+                recent_failures=(
+                    fails_by_id.get(loop_id, 0) if loop_id is not None else 0
+                ),
             )
         )
     return tuple(loops)
@@ -774,6 +800,41 @@ def _sources(
     )
 
 
+def _flapping(
+    scan_loops: tuple[ScanLoop, ...],
+    advisory_views: tuple[AdvisoryView, ...],
+) -> tuple[FlappingLoop, ...]:
+    """Loops whose root workflow has failed at least the flap threshold.
+
+    Rolls the acting (scan) and advisory liveness rows into one cross-family
+    list, worst first — a loop the watchdog keeps reviving, surfaced at a glance
+    (it also alerts via ntfy on each revival).
+    """
+    flapping: list[FlappingLoop] = []
+    for row in scan_loops:
+        if row.recent_failures >= _FLAP_THRESHOLD:
+            flapping.append(
+                FlappingLoop(
+                    repo=row.repo,
+                    loop=row.loop,
+                    failures=row.recent_failures,
+                    live=row.live,
+                )
+            )
+    for view in advisory_views:
+        for advisory_loop in view.loops:
+            if advisory_loop.recent_failures >= _FLAP_THRESHOLD:
+                flapping.append(
+                    FlappingLoop(
+                        repo=advisory_loop.repo,
+                        loop=view.loop,
+                        failures=advisory_loop.recent_failures,
+                        live=advisory_loop.live,
+                    )
+                )
+    return tuple(sorted(flapping, key=lambda f: (-f.failures, f.repo, f.loop)))
+
+
 def assemble(
     *,
     now: datetime,
@@ -833,6 +894,7 @@ def assemble(
     advisory_views = _advisory_views(
         repos, advisory, pr_advisory, advisory_intervals or {}
     )
+    scan_loop_rows = _scan_loops(repos, loops, scans)
     return DashboardModel(
         generated_at=now,
         repos_configured=repos,
@@ -845,7 +907,7 @@ def assemble(
             run_telemetry,
             clickhouse_error,
         ),
-        scan_loops=_scan_loops(repos, loops, scans),
+        scan_loops=scan_loop_rows,
         track_record=_track_record(rows),
         class_gates=class_gates,
         verification=_verification(rows),
@@ -858,4 +920,5 @@ def assemble(
         advisory=advisory_views,
         telemetry=run_telemetry,
         bump_loops=bump_loops,
+        flapping=_flapping(scan_loop_rows, advisory_views),
     )

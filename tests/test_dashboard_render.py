@@ -544,3 +544,25 @@ def test_bumps_fold_lists_bumps_with_post_merge_column():
     html = render.page(_model_outcomes(prs, {(REPO, 1): "reverted"}))
     assert "post-merge" in html  # the bumps-table column
     assert "reverted" in html  # the per-row post-merge tag
+
+
+def test_header_shows_flapping_badge_when_a_loop_keeps_failing():
+    scans = [
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 1, tzinfo=UTC),
+        ),
+        ScanExecution(
+            workflow_id="froot-scan-mseeks-revisionist",
+            status="failed",
+            start=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+    ]
+    html = render.page(_model(scans=scans))
+    assert "1 flapping" in html
+    assert "mseeks/revisionist (2x)" in html  # the tooltip detail
+
+
+def test_header_has_no_flapping_badge_when_every_loop_is_healthy():
+    assert "flapping" not in render.page(_model())
