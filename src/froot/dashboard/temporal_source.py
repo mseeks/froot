@@ -45,6 +45,12 @@ _ADVISORY_SOURCES: Final = (
         "PrDocRefsReviewWorkflow",
         "kind",
     ),
+    (
+        Loop.DOC_COHERENCE,
+        "DocCoherenceReviewWorkflow",
+        "PrDocCoherenceReviewWorkflow",
+        "kind",
+    ),
 )
 
 

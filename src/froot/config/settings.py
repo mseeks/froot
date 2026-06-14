@@ -382,6 +382,38 @@ class DocRefsReviewSettings(BaseSettings):
         return value
 
 
+class DocCoherenceReviewSettings(BaseSettings):
+    """The semantic doc-coherence reviewer loop (``FROOT_DOC_COHERENCE_*``).
+
+    A per-repo loop that polls open PRs and runs the read-only agentic executor
+    to find SEMANTIC drift — docs whose claims about the code no longer match —
+    leaving an advisory comment. Advisory only; a human fixes the doc.
+
+    Off by default: a new loop opts in deliberately (MHE's observe-then-act
+    staging), and this one runs a heavier agent, so a steward enables it per
+    repo when the cost is worth it.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_DOC_COHERENCE_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    enabled: bool = False
+    # Advisory, so a little latency is fine — it never races a merge.
+    poll_interval_seconds: int = Field(default=300, gt=0)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_is_off(cls, value: object) -> object:
+        """Treat a blank value as the default (off), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+
 class AgenticSettings(BaseSettings):
     """The agentic executor's bounds (``FROOT_AGENTIC_*``).
 

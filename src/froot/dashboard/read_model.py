@@ -40,6 +40,7 @@ from froot.policy.autonomy import AutonomyPolicy, class_earned, pr_autonomy
 from froot.policy.canary import is_canary, score_probe
 from froot.policy.naming import (
     a11y_review_workflow_id,
+    doc_coherence_review_workflow_id,
     doc_refs_review_workflow_id,
     review_workflow_id,
     scan_workflow_id,
@@ -602,6 +603,7 @@ _ADVISORY_LOOP_ID = {
     Loop.DETERMINISM_REVIEW: review_workflow_id,
     Loop.A11Y_REVIEW: a11y_review_workflow_id,
     Loop.DOC_REFS: doc_refs_review_workflow_id,
+    Loop.DOC_COHERENCE: doc_coherence_review_workflow_id,
 }
 
 

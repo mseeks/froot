@@ -53,6 +53,7 @@ async def _watch() -> None:
     from froot.adapters.ntfy import notify
     from froot.config.settings import (
         A11yReviewSettings,
+        DocCoherenceReviewSettings,
         DocRefsReviewSettings,
         NtfySettings,
         ReviewSettings,
@@ -64,6 +65,7 @@ async def _watch() -> None:
     review = ReviewSettings()
     a11y = A11yReviewSettings()
     doc_refs = DocRefsReviewSettings()
+    doc_coherence = DocCoherenceReviewSettings()
     expected = plans(
         repos=settings.repos,
         loops=settings.loops,
@@ -75,6 +77,8 @@ async def _watch() -> None:
             a11y_interval_seconds=a11y.poll_interval_seconds,
             doc_refs_enabled=doc_refs.enabled,
             doc_refs_interval_seconds=doc_refs.poll_interval_seconds,
+            doc_coherence_enabled=doc_coherence.enabled,
+            doc_coherence_interval_seconds=doc_coherence.poll_interval_seconds,
         ),
     )
     if not expected:

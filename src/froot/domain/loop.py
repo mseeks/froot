@@ -8,9 +8,10 @@ and a little namespacing make a loop a specialist. Two families ship. The acting
 (remove unused dependencies). The advisory (emit-signal) loops read open PRs and
 leave one decaying comment, never a merge:
 :data:`Loop.DETERMINISM_REVIEW` (transitive Temporal-determinism hazards),
-:data:`Loop.A11Y_REVIEW` (source-level accessibility gaps), and
-:data:`Loop.DOC_REFS` (dangling documentation references). The family is the
-loop's :class:`~froot.loops.registry.LoopSpec` tail; this enum is just the key.
+:data:`Loop.A11Y_REVIEW` (source-level accessibility gaps),
+:data:`Loop.DOC_REFS` (dangling documentation references), and
+:data:`Loop.DOC_COHERENCE` (semantic doc drift). The family is the loop's
+:class:`~froot.loops.registry.LoopSpec` tail; this enum is just the key.
 
 A loop's *value* is the kebab name that namespaces everything it owns — the
 branch prefix (``froot/<loop>``), the PR label, the workflow ids, and the
@@ -33,3 +34,4 @@ class Loop(StrEnum):
     DETERMINISM_REVIEW = "determinism-review"
     A11Y_REVIEW = "a11y-review"
     DOC_REFS = "doc-refs"
+    DOC_COHERENCE = "doc-coherence"
