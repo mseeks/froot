@@ -29,11 +29,13 @@ from froot.loops import registry
 from froot.loops.registry import Disposition
 from froot.policy.naming import (
     a11y_review_workflow_id,
+    doc_refs_review_workflow_id,
     review_workflow_id,
     scan_workflow_id,
 )
 from froot.workflow.types import (
     A11yReviewScanParams,
+    DocRefsReviewScanParams,
     ReviewScanParams,
     ScanParams,
 )
@@ -44,7 +46,12 @@ if TYPE_CHECKING:
     from froot.domain.repo import TargetRepo
 
 # The input every loop's self-scheduling root workflow takes.
-_Params = ScanParams | ReviewScanParams | A11yReviewScanParams
+_Params = (
+    ScanParams
+    | ReviewScanParams
+    | A11yReviewScanParams
+    | DocRefsReviewScanParams
+)
 
 
 @dataclass(frozen=True)
@@ -88,7 +95,11 @@ class _Advisory:
     interval_seconds: int
     workflow_type: str
     namer: Callable[[TargetRepo], str]
-    params: type[ReviewScanParams] | type[A11yReviewScanParams]
+    params: (
+        type[ReviewScanParams]
+        | type[A11yReviewScanParams]
+        | type[DocRefsReviewScanParams]
+    )
     label: str
 
 
@@ -98,6 +109,8 @@ def advisory_wiring(
     review_interval_seconds: int,
     a11y_enabled: bool,
     a11y_interval_seconds: int,
+    doc_refs_enabled: bool,
+    doc_refs_interval_seconds: int,
 ) -> dict[Loop, _Advisory]:
     """The advisory loops' bespoke start wiring, keyed by loop."""
     return {
@@ -116,6 +129,14 @@ def advisory_wiring(
             namer=a11y_review_workflow_id,
             params=A11yReviewScanParams,
             label="a11y",
+        ),
+        Loop.DOC_REFS: _Advisory(
+            enabled=doc_refs_enabled,
+            interval_seconds=doc_refs_interval_seconds,
+            workflow_type="DocRefsReviewWorkflow",
+            namer=doc_refs_review_workflow_id,
+            params=DocRefsReviewScanParams,
+            label="doc-refs",
         ),
     }
 
@@ -185,6 +206,7 @@ async def _start() -> None:
 
     from froot.config.settings import (
         A11yReviewSettings,
+        DocRefsReviewSettings,
         ReviewSettings,
         Settings,
         TemporalSettings,
@@ -193,6 +215,7 @@ async def _start() -> None:
     settings = Settings()  # non-secret values come from the environment
     review = ReviewSettings()
     a11y = A11yReviewSettings()
+    doc_refs = DocRefsReviewSettings()
     to_start = plans(
         repos=settings.repos,
         loops=settings.loops,
@@ -202,6 +225,8 @@ async def _start() -> None:
             review_interval_seconds=review.poll_interval_seconds,
             a11y_enabled=a11y.enabled,
             a11y_interval_seconds=a11y.poll_interval_seconds,
+            doc_refs_enabled=doc_refs.enabled,
+            doc_refs_interval_seconds=doc_refs.poll_interval_seconds,
         ),
     )
     if not to_start:

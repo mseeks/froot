@@ -349,6 +349,39 @@ class A11yReviewSettings(BaseSettings):
         return value
 
 
+class DocRefsReviewSettings(BaseSettings):
+    """The documentation-reference reviewer loop (``FROOT_DOC_REFS_*``).
+
+    A per-repo loop that polls open PRs and leaves an advisory comment when a
+    changed Markdown doc references something missing at the head — a dead link
+    or file path, or a removed ``make`` target — flagging hardest the references
+    a PR's own deletions broke. Advisory only; a human fixes the doc.
+
+    Off by default: a new loop opts in deliberately (MHE's observe-then-act
+    staging). It only fires when a doc actually dangles, so enabling it
+    cluster-wide is low-noise.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_DOC_REFS_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    enabled: bool = False
+    # Advisory, so a little latency is fine — it never races a merge.
+    poll_interval_seconds: int = Field(default=300, gt=0)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_is_off(cls, value: object) -> object:
+        """Treat a blank value as the default (off), not an error."""
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+
 class BehaviorSettings(BaseSettings):
     """Loop-hygiene toggles (``FROOT_*``), both defaulting on.
 

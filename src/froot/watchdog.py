@@ -53,6 +53,7 @@ async def _watch() -> None:
     from froot.adapters.ntfy import notify
     from froot.config.settings import (
         A11yReviewSettings,
+        DocRefsReviewSettings,
         NtfySettings,
         ReviewSettings,
         Settings,
@@ -62,6 +63,7 @@ async def _watch() -> None:
     settings = Settings()  # non-secret values come from the environment
     review = ReviewSettings()
     a11y = A11yReviewSettings()
+    doc_refs = DocRefsReviewSettings()
     expected = plans(
         repos=settings.repos,
         loops=settings.loops,
@@ -71,6 +73,8 @@ async def _watch() -> None:
             review_interval_seconds=review.poll_interval_seconds,
             a11y_enabled=a11y.enabled,
             a11y_interval_seconds=a11y.poll_interval_seconds,
+            doc_refs_enabled=doc_refs.enabled,
+            doc_refs_interval_seconds=doc_refs.poll_interval_seconds,
         ),
     )
     if not expected:

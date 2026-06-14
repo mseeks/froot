@@ -144,6 +144,7 @@ def _ensure() -> None:
         dead_code,
         dependency_patch,
         determinism_review,
+        doc_refs,
         security_patch,
     )
 

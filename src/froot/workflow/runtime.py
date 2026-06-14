@@ -14,6 +14,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from froot.workflow import activities
 from froot.workflow.a11y_review_workflow import A11yReviewWorkflow
 from froot.workflow.bump_workflow import BumpWorkflow
+from froot.workflow.doc_refs_review_workflow import DocRefsReviewWorkflow
 from froot.workflow.pr_a11y_review_workflow import PrA11yReviewWorkflow
 from froot.workflow.pr_doc_refs_review_workflow import PrDocRefsReviewWorkflow
 from froot.workflow.pr_review_workflow import PrReviewWorkflow
@@ -32,6 +33,7 @@ WORKFLOWS = [
     PrReviewWorkflow,
     A11yReviewWorkflow,
     PrA11yReviewWorkflow,
+    DocRefsReviewWorkflow,
     PrDocRefsReviewWorkflow,
 ]
 

@@ -14,12 +14,14 @@ from froot.domain.loop import Loop
 from froot.domain.repo import TargetRepo
 from froot.policy.naming import (
     a11y_review_workflow_id,
+    doc_refs_review_workflow_id,
     review_workflow_id,
     scan_workflow_id,
 )
 from froot.starter import _Start, advisory_wiring, plans
 from froot.workflow.types import (
     A11yReviewScanParams,
+    DocRefsReviewScanParams,
     ReviewScanParams,
     ScanParams,
 )
@@ -37,6 +39,7 @@ def _plans(
     repos: tuple[TargetRepo, ...] = (REPO,),
     review: bool = True,
     a11y: bool = False,
+    doc_refs: bool = False,
     scan_interval: int = 86_400,
 ):
     return plans(
@@ -48,6 +51,8 @@ def _plans(
             review_interval_seconds=300,
             a11y_enabled=a11y,
             a11y_interval_seconds=600,
+            doc_refs_enabled=doc_refs,
+            doc_refs_interval_seconds=600,
         ),
     )
 
@@ -142,8 +147,24 @@ def test_advisory_wiring_routes_each_loop_to_its_own_workflow():
         review_interval_seconds=1,
         a11y_enabled=True,
         a11y_interval_seconds=2,
+        doc_refs_enabled=True,
+        doc_refs_interval_seconds=3,
     )
     assert w[Loop.DETERMINISM_REVIEW].workflow_type == "ReviewWorkflow"
     assert w[Loop.DETERMINISM_REVIEW].params is ReviewScanParams
     assert w[Loop.A11Y_REVIEW].workflow_type == "A11yReviewWorkflow"
     assert w[Loop.A11Y_REVIEW].params is A11yReviewScanParams
+    assert w[Loop.DOC_REFS].workflow_type == "DocRefsReviewWorkflow"
+    assert w[Loop.DOC_REFS].params is DocRefsReviewScanParams
+
+
+def test_doc_refs_starts_only_when_enabled():
+    # Advisory: no start by default, started when its flag is on — the
+    # observe-then-act gate, same as the other advisory loops.
+    assert doc_refs_review_workflow_id(REPO) not in _by_id(
+        _plans(doc_refs=False)
+    )
+    on = _by_id(_plans(doc_refs=True))
+    start = on[doc_refs_review_workflow_id(REPO)]
+    assert start.workflow_type == "DocRefsReviewWorkflow"
+    assert start.label == "doc-refs review"

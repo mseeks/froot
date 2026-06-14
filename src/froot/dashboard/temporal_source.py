@@ -39,6 +39,12 @@ _PR_URL: Final = re.compile(r"github\.com/([^/]+/[^/]+)/pull/\d+")
 _ADVISORY_SOURCES: Final = (
     (Loop.DETERMINISM_REVIEW, "ReviewWorkflow", "PrReviewWorkflow", "rule"),
     (Loop.A11Y_REVIEW, "A11yReviewWorkflow", "PrA11yReviewWorkflow", "kind"),
+    (
+        Loop.DOC_REFS,
+        "DocRefsReviewWorkflow",
+        "PrDocRefsReviewWorkflow",
+        "kind",
+    ),
 )
 
 
