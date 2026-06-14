@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from froot.domain.loop import Loop
 from froot.policy.naming import (
+    a11y_review_workflow_id,
     branch_name,
     branch_package_prefix,
     bump_workflow_id,
+    doc_refs_review_workflow_id,
+    pr_a11y_review_workflow_id,
+    pr_doc_refs_review_workflow_id,
     scan_workflow_id,
 )
 from tests.support import (
@@ -135,6 +139,18 @@ def test_dead_export_names_use_symbol_export_tail():
     assert bump_workflow_id(repo, item, Loop.DEAD_CODE) == (
         "froot-bump-dead-code-acme-widgets-src-util.ts-unusedhelper-export"
     )
+
+
+def test_doc_refs_review_ids_deterministic_and_distinct():
+    repo = make_repo("acme/widgets")
+    assert doc_refs_review_workflow_id(repo) == "froot-docrefs-acme-widgets"
+    pr_id = pr_doc_refs_review_workflow_id(repo, 7, "abcdef1234567890")
+    assert pr_id == "froot-pr-docrefs-acme-widgets-7-abcdef123456"
+    # same inputs -> same id (the dispatch dedup key)
+    assert pr_id == pr_doc_refs_review_workflow_id(repo, 7, "abcdef1234567890")
+    # distinct from the a11y ring on the same repo/PR (no id collision)
+    assert doc_refs_review_workflow_id(repo) != a11y_review_workflow_id(repo)
+    assert pr_id != pr_a11y_review_workflow_id(repo, 7, "abcdef1234567890")
 
 
 def test_bump_names_unchanged_by_work_item_widening():

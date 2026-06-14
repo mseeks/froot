@@ -13,6 +13,7 @@ from froot.domain.a11y import A11yCandidate, A11yFinding
 from froot.domain.base import Frozen
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.determinism import FrontierItem, ReviewFinding
+from froot.domain.doc_refs import DocRefCandidate, DocRefFinding
 from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
 from froot.domain.pull_request import PullRequestRef
@@ -287,3 +288,53 @@ class PostA11yInput(Frozen):
     target: TargetRepo
     pr: PullRequestRef
     findings: tuple[A11yFinding, ...]
+
+
+class DocRefsReviewScanParams(Frozen):
+    """Input to the self-scheduling doc-refs-review loop (per repo)."""
+
+    target: TargetRepo
+    interval_seconds: int = Field(
+        default=_DEFAULT_REVIEW_INTERVAL_SECONDS, gt=0
+    )
+    continuous: bool = False
+
+
+class DocRefsReviewScanResult(Frozen):
+    """The result of one doc-refs-review-scan tick.
+
+    Attributes:
+        reviewed: Open PRs seen this tick.
+        dispatched: PR doc-refs reviews handed off (idempotent per PR + SHA).
+    """
+
+    reviewed: int
+    dispatched: int
+
+
+class PrDocRefsReviewParams(Frozen):
+    """Input to a single PR's doc-refs review (also the scan activity input)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class DispatchDocRefsInput(Frozen):
+    """Input to the dispatch-pr-doc-refs-review activity (start a PR review)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class AdjudicateDocRefsInput(Frozen):
+    """Input to the doc-refs adjudication activity (the model pass)."""
+
+    candidates: tuple[DocRefCandidate, ...]
+
+
+class PostDocRefsInput(Frozen):
+    """Input to the post-doc-refs-review activity (upsert the comment)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+    findings: tuple[DocRefFinding, ...]
