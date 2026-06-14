@@ -14,8 +14,14 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from froot.workflow import activities
 from froot.workflow.a11y_review_workflow import A11yReviewWorkflow
 from froot.workflow.bump_workflow import BumpWorkflow
+from froot.workflow.doc_coherence_review_workflow import (
+    DocCoherenceReviewWorkflow,
+)
 from froot.workflow.doc_refs_review_workflow import DocRefsReviewWorkflow
 from froot.workflow.pr_a11y_review_workflow import PrA11yReviewWorkflow
+from froot.workflow.pr_doc_coherence_review_workflow import (
+    PrDocCoherenceReviewWorkflow,
+)
 from froot.workflow.pr_doc_refs_review_workflow import PrDocRefsReviewWorkflow
 from froot.workflow.pr_review_workflow import PrReviewWorkflow
 from froot.workflow.review_workflow import ReviewWorkflow
@@ -35,6 +41,8 @@ WORKFLOWS = [
     PrA11yReviewWorkflow,
     DocRefsReviewWorkflow,
     PrDocRefsReviewWorkflow,
+    DocCoherenceReviewWorkflow,
+    PrDocCoherenceReviewWorkflow,
 ]
 
 ALL_ACTIVITIES: list[Callable[..., object]] = [
@@ -63,4 +71,7 @@ ALL_ACTIVITIES: list[Callable[..., object]] = [
     activities.adjudicate_doc_refs,
     activities.post_doc_refs_review,
     activities.dispatch_pr_doc_refs_review,
+    activities.run_doc_coherence_agent,
+    activities.post_doc_coherence_review,
+    activities.dispatch_pr_doc_coherence_review,
 ]

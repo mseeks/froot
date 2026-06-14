@@ -30,6 +30,7 @@ from froot.domain.changelog import (
 from froot.domain.ci import CIStatus
 from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
+from froot.domain.doc_coherence import DocCoherenceRun
 from froot.domain.doc_refs import DocRefAnalysis, DocRefVerdict
 from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
@@ -50,6 +51,13 @@ from froot.policy.compose import (
 )
 from froot.policy.dead_source import unexport_line
 from froot.policy.determinism import analyze_workflow_surface
+from froot.policy.doc_coherence_comment import (
+    DOC_COHERENCE_MARKER,
+    render_doc_coherence_comment,
+)
+from froot.policy.doc_coherence_comment import (
+    should_post as should_post_doc_coherence,
+)
 from froot.policy.doc_refs_comment import (
     DOC_REFS_MARKER,
     render_doc_refs_comment,
@@ -62,6 +70,7 @@ from froot.policy.naming import (
     branch_name,
     bump_workflow_id,
     pr_a11y_review_workflow_id,
+    pr_doc_coherence_review_workflow_id,
     pr_doc_refs_review_workflow_id,
     pr_review_workflow_id,
 )
@@ -81,6 +90,7 @@ from froot.workflow.types import (
     CiCheckInput,
     CloseInput,
     DispatchA11yInput,
+    DispatchDocCoherenceInput,
     DispatchDocRefsInput,
     DispatchInput,
     DispatchReviewInput,
@@ -90,9 +100,11 @@ from froot.workflow.types import (
     MergeInput,
     OpenPrInput,
     PostA11yInput,
+    PostDocCoherenceInput,
     PostDocRefsInput,
     PostReviewInput,
     PrA11yReviewParams,
+    PrDocCoherenceReviewParams,
     PrDocRefsReviewParams,
     PrReviewParams,
     ReconcileInput,
@@ -111,6 +123,7 @@ _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
 _a11y_log = logging.getLogger("froot.a11y")
 _doc_refs_log = logging.getLogger("froot.doc-refs")
+_doc_coh_log = logging.getLogger("froot.doc-coherence")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
 _gate_log = logging.getLogger("froot.gate")
@@ -1101,4 +1114,112 @@ async def dispatch_pr_doc_refs_review(params: DispatchDocRefsInput) -> None:
         )
     except WorkflowAlreadyStartedError:
         # This (PR, head SHA) already has a doc-refs review — a no-op.
+        return
+
+
+# ── The doc-coherence reviewer (the agentic semantic ring) ───────────────────
+@activity.defn
+async def run_doc_coherence_agent(
+    params: PrDocCoherenceReviewParams,
+) -> DocCoherenceRun:
+    """Check out the PR head and run the read-only agent to map doc drift.
+
+    The whole nondeterministic, multi-turn agent run lives in THIS activity (its
+    model + tool calls are recorded as one activity result), so the workflow
+    stays deterministic — the determinism gates enforce that nothing reaches the
+    agent from a workflow body. A down/over-budget agent returns an
+    ``ended-early`` status rather than raising, so the loop degrades rather
+    than stalls.
+    """
+    from froot.adapters.doc_coherence_agent import map_doc_coherence
+    from froot.adapters.github import GitHubForge
+    from froot.adapters.model import build_model
+    from froot.config.settings import AgenticSettings
+
+    forge = GitHubForge()
+    max_requests = AgenticSettings().max_requests
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        await forge.checkout_pull_request(
+            params.target, workspace, params.pr.number
+        )
+        items, status = await beating(
+            map_doc_coherence(
+                model=build_model(),
+                checkout=workspace,
+                max_requests=max_requests,
+            )
+        )
+    return DocCoherenceRun(items=items, status=status)
+
+
+@activity.defn
+async def post_doc_coherence_review(
+    params: PostDocCoherenceInput,
+) -> str | None:
+    """Upsert (or clear) the doc-coherence advisory comment; log the ledger row.
+
+    When the agent could not complete (``completed=False``) the comment reads
+    "couldn't verify" rather than a false all-clear; a clean PR with no prior
+    comment stays silent.
+    """
+    from froot.adapters.github import GitHubForge
+
+    forge = GitHubForge()
+    exists = await forge.find_marked_comment(
+        params.target, params.pr.number, DOC_COHERENCE_MARKER
+    )
+    url: str | None = None
+    if should_post_doc_coherence(
+        has_findings=bool(params.findings), comment_exists=exists
+    ):
+        body = render_doc_coherence_comment(
+            params.findings, params.pr.head_sha, completed=params.completed
+        )
+        url = await forge.upsert_issue_comment(
+            params.target, params.pr.number, DOC_COHERENCE_MARKER, body
+        )
+    _doc_coh_log.info(
+        json.dumps(
+            {
+                "event": "loop_outcome",
+                "loop": "doc-coherence",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "head_sha": params.pr.head_sha,
+                "findings": len(params.findings),
+                "completed": params.completed,
+                "comment_url": url,
+            }
+        )
+    )
+    return url
+
+
+@activity.defn
+async def dispatch_pr_doc_coherence_review(
+    params: DispatchDocCoherenceInput,
+) -> None:
+    """Start a PR's doc-coherence review (idempotent per PR + head SHA)."""
+    from temporalio.common import WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from froot.workflow.pr_doc_coherence_review_workflow import (
+        PrDocCoherenceReviewWorkflow,
+    )
+    from froot.workflow.temporal_client import client, task_queue
+
+    temporal = await client()
+    try:
+        await temporal.start_workflow(
+            PrDocCoherenceReviewWorkflow.run,
+            PrDocCoherenceReviewParams(target=params.target, pr=params.pr),
+            id=pr_doc_coherence_review_workflow_id(
+                params.target, params.pr.number, params.pr.head_sha
+            ),
+            task_queue=task_queue(),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        # This (PR, head SHA) already has a doc-coherence review — a no-op.
         return
