@@ -13,6 +13,7 @@ from froot.domain.a11y import A11yCandidate, A11yFinding
 from froot.domain.base import Frozen
 from froot.domain.changelog import ChangelogVerdict
 from froot.domain.determinism import FrontierItem, ReviewFinding
+from froot.domain.doc_coherence import DocCoherenceFinding
 from froot.domain.doc_refs import DocRefCandidate, DocRefFinding
 from froot.domain.loop import Loop
 from froot.domain.outcome import LoopOutcome
@@ -338,3 +339,43 @@ class PostDocRefsInput(Frozen):
     target: TargetRepo
     pr: PullRequestRef
     findings: tuple[DocRefFinding, ...]
+
+
+class DocCoherenceReviewScanParams(Frozen):
+    """Input to the self-scheduling doc-coherence-review loop (per repo)."""
+
+    target: TargetRepo
+    interval_seconds: int = Field(
+        default=_DEFAULT_REVIEW_INTERVAL_SECONDS, gt=0
+    )
+    continuous: bool = False
+
+
+class DocCoherenceReviewScanResult(Frozen):
+    """The result of one doc-coherence-review-scan tick."""
+
+    reviewed: int
+    dispatched: int
+
+
+class PrDocCoherenceReviewParams(Frozen):
+    """Input to one PR's doc-coherence review (also the agent activity)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class DispatchDocCoherenceInput(Frozen):
+    """Input to the dispatch-pr-doc-coherence-review activity."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+
+
+class PostDocCoherenceInput(Frozen):
+    """Input to the post-doc-coherence-review activity (upsert the comment)."""
+
+    target: TargetRepo
+    pr: PullRequestRef
+    findings: tuple[DocCoherenceFinding, ...]
+    completed: bool
