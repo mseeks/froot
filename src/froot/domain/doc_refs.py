@@ -54,3 +54,48 @@ class DocRefAnalysis(Frozen):
 
     candidates: tuple[DocRefCandidate, ...] = ()
     scanned_files: int = Field(default=0, ge=0)
+
+
+DocRefBucket = Literal["broken", "intentional", "judgment"]
+"""The model's three verdicts: a real broken reference, an intentional /
+historical mention (e.g. a changelog citing an old path), or a judgment call."""
+
+
+class DocRefVerdict(Frozen):
+    """The model's typed adjudication of one candidate."""
+
+    bucket: DocRefBucket
+    rationale: str = Field(min_length=1)
+    citation: str = ""
+    """The exact broken reference observed (required for a ``broken``)."""
+    action: str = ""
+    """The literal next step, when ``bucket == "broken"``."""
+
+
+class DocRefFinding(Frozen):
+    """A surfaced finding — one item of the advisory comment.
+
+    Only ``broken`` and ``judgment`` candidates become findings; an
+    ``intentional`` is dropped. A ``broken`` only reaches here with a citation
+    (cite-or-omit), so ``referent`` is always a real quoted observation.
+    """
+
+    kind: DocRefKind
+    file: str = Field(min_length=1)
+    line: int = Field(ge=1)
+    bucket: Literal["broken", "judgment"]
+    referent: str = Field(min_length=1)
+    """The reference that resolves to nothing — the quoted observation."""
+    why: str = Field(min_length=1)
+    action: str = ""
+    broken_by_pr: bool = False
+
+
+class PrDocRefsResult(Frozen):
+    """The loop's recorded outcome for one PR review (a derived ledger row)."""
+
+    pr_number: int = Field(ge=1)
+    head_sha: str = Field(min_length=7)
+    candidates: int = Field(ge=0)
+    findings: tuple[DocRefFinding, ...] = ()
+    comment_url: str | None = None
