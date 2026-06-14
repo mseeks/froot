@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from froot.domain.loop import Loop
     from froot.domain.pull_request import (
         BranchName,
+        PrFileChange,
         PullRequestDraft,
         PullRequestRef,
     )
@@ -174,6 +175,17 @@ class Forge(Protocol):
 
         Scopes a per-PR review to what the PR actually touches; removed files
         are omitted (no content at the head to read).
+        """
+        ...
+
+    async def list_pull_request_changes(
+        self, target: TargetRepo, number: int
+    ) -> tuple[PrFileChange, ...]:
+        """List a PR's file changes WITH status (keeps removed + renamed).
+
+        The feed for a loop that reasons about references a PR *broke* — a
+        deleted target, a renamed file. The richer companion to
+        :meth:`list_pull_request_files`, which drops removed/renamed entries.
         """
         ...
 

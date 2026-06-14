@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, final
+from typing import TYPE_CHECKING, Any, cast, final, get_args
 
 import httpx
 from temporalio.exceptions import ApplicationError
@@ -29,7 +29,12 @@ from froot.domain.ci import (
     CIPending,
     CIStatus,
 )
-from froot.domain.pull_request import BranchName, PullRequestRef
+from froot.domain.pull_request import (
+    BranchName,
+    PrFileChange,
+    PrFileStatus,
+    PullRequestRef,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -260,6 +265,27 @@ def _pull_request_ref(payload: Any) -> PullRequestRef:
     )
 
 
+_PR_FILE_STATUSES: frozenset[str] = frozenset(get_args(PrFileStatus))
+
+
+def _pr_file_change(payload: Any) -> PrFileChange:
+    """Coerce a GitHub PR-file JSON entry into a domain change (boundary).
+
+    An unrecognized status degrades to ``"modified"`` so a future GitHub status
+    never breaks the feed (consumers only special-case removed/renamed).
+    """
+    raw = str(payload.get("status", "modified"))
+    status = (
+        cast("PrFileStatus", raw) if raw in _PR_FILE_STATUSES else "modified"
+    )
+    previous = payload.get("previous_filename")
+    return PrFileChange(
+        filename=str(payload["filename"]),
+        status=status,
+        previous_filename=str(previous) if previous is not None else None,
+    )
+
+
 @final
 class GitHubForge:
     """A :class:`~froot.ports.protocols.Forge` over git + the GitHub API."""
@@ -386,6 +412,26 @@ class GitHubForge:
                     ):
                         names.append(str(entry["filename"]))
         return tuple(names)
+
+    async def list_pull_request_changes(
+        self, target: TargetRepo, number: int
+    ) -> tuple[PrFileChange, ...]:
+        """List a PR's file changes WITH status (keeps removed + renamed).
+
+        The richer companion to :meth:`list_pull_request_files`: it retains the
+        removed and renamed entries (with the pre-rename path) a path-only feed
+        drops, so a loop can reason about references the PR *broke*. Paginated
+        so a large PR is read whole.
+        """
+        changes: list[PrFileChange] = []
+        async with _client() as client:
+            async for page in _iter_pages(
+                client, f"/repos/{target.repo.slug}/pulls/{number}/files"
+            ):
+                for entry in page.json():
+                    if isinstance(entry, dict):
+                        changes.append(_pr_file_change(entry))
+        return tuple(changes)
 
     async def find_marked_comment(
         self, target: TargetRepo, number: int, marker: str

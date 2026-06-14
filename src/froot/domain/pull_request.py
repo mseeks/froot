@@ -8,6 +8,8 @@ deterministic), so re-running never opens a duplicate — see
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from froot.domain.base import Frozen
@@ -64,3 +66,29 @@ class PullRequestDraft(Frozen):
     base: str = Field(min_length=1)
     title: str = Field(min_length=1)
     body: str
+
+
+# GitHub's documented per-file change statuses in a pull request.
+PrFileStatus = Literal[
+    "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"
+]
+
+
+class PrFileChange(Frozen):
+    """One file a pull request changed, with its status — the richer feed.
+
+    The path-only ``list_pull_request_files`` feed drops removed and renamed
+    files; a loop that reasons about references a PR *broke* needs them — a
+    deleted target breaks a doc link, a rename moves it. For a rename (or copy),
+    ``previous_filename`` is the pre-rename path.
+
+    Attributes:
+        filename: The file's path at the PR head (the new path for a rename).
+        status: GitHub's change status for the file.
+        previous_filename: The pre-rename path when ``status`` is ``renamed`` /
+            ``copied``, else ``None``.
+    """
+
+    filename: str = Field(min_length=1)
+    status: PrFileStatus
+    previous_filename: str | None = None

@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 from froot.adapters import github
 from froot.adapters.github import (
     CheckRow,
+    _pr_file_change,
     _pull_request_ref,
     ci_status_from_checks,
 )
@@ -64,6 +65,30 @@ def test_pull_request_ref_from_payload():
     assert ref.number == 7
     assert ref.branch.value == "froot/dependency-patch/left-pad-1.4.3"
     assert ref.head_sha == "abc1234"
+
+
+def test_pr_file_change_keeps_removed_and_renamed():
+    # The path-only list_pull_request_files drops these; the richer feed must
+    # keep a removed target and a rename's previous path (the refs a PR breaks).
+    removed = _pr_file_change({"filename": "docs/gone.md", "status": "removed"})
+    assert removed.status == "removed"
+    assert removed.previous_filename is None
+
+    renamed = _pr_file_change(
+        {
+            "filename": "src/new.py",
+            "status": "renamed",
+            "previous_filename": "src/old.py",
+        }
+    )
+    assert renamed.status == "renamed"
+    assert renamed.previous_filename == "src/old.py"
+
+
+def test_pr_file_change_unknown_status_degrades_to_modified():
+    # A future GitHub status must not break the feed (boundary robustness).
+    change = _pr_file_change({"filename": "x.py", "status": "future-thing"})
+    assert change.status == "modified"
 
 
 # ── Rate-limit classification (_raise_for_status) ───────────────────────────
