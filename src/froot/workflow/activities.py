@@ -30,6 +30,7 @@ from froot.domain.changelog import (
 from froot.domain.ci import CIStatus
 from froot.domain.dead_source import DeadExport, DeadFile
 from froot.domain.determinism import AnalysisResult, FrontierVerdict
+from froot.domain.doc_refs import DocRefAnalysis, DocRefVerdict
 from froot.domain.pull_request import PullRequestDraft, PullRequestRef
 from froot.domain.removal import Removal
 from froot.domain.repo import TargetRepo
@@ -49,10 +50,19 @@ from froot.policy.compose import (
 )
 from froot.policy.dead_source import unexport_line
 from froot.policy.determinism import analyze_workflow_surface
+from froot.policy.doc_refs_comment import (
+    DOC_REFS_MARKER,
+    render_doc_refs_comment,
+)
+from froot.policy.doc_refs_comment import (
+    should_post as should_post_doc_refs,
+)
+from froot.policy.doc_refs_scan import scan_doc_refs
 from froot.policy.naming import (
     branch_name,
     bump_workflow_id,
     pr_a11y_review_workflow_id,
+    pr_doc_refs_review_workflow_id,
     pr_review_workflow_id,
 )
 from froot.policy.review_comment import (
@@ -65,11 +75,13 @@ from froot.policy.review_comment import (
 from froot.workflow.constants import HEARTBEAT_INTERVAL
 from froot.workflow.types import (
     AdjudicateA11yInput,
+    AdjudicateDocRefsInput,
     AdjudicateInput,
     AutoMergeInput,
     CiCheckInput,
     CloseInput,
     DispatchA11yInput,
+    DispatchDocRefsInput,
     DispatchInput,
     DispatchReviewInput,
     GateReviewInput,
@@ -78,8 +90,10 @@ from froot.workflow.types import (
     MergeInput,
     OpenPrInput,
     PostA11yInput,
+    PostDocRefsInput,
     PostReviewInput,
     PrA11yReviewParams,
+    PrDocRefsReviewParams,
     PrReviewParams,
     ReconcileInput,
     RecordInput,
@@ -96,6 +110,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger("froot.outcome")
 _review_log = logging.getLogger("froot.review")
 _a11y_log = logging.getLogger("froot.a11y")
+_doc_refs_log = logging.getLogger("froot.doc-refs")
 _reconcile_log = logging.getLogger("froot.reconcile")
 _scan_log = logging.getLogger("froot.scan")
 _gate_log = logging.getLogger("froot.gate")
@@ -963,4 +978,127 @@ async def dispatch_pr_a11y_review(params: DispatchA11yInput) -> None:
     except WorkflowAlreadyStartedError:
         # This (PR, head SHA) already has an a11y review — a no-op, so
         # re-polling never double-reviews the same commit.
+        return
+
+
+# ── The doc-refs reviewer (the documentation-reference ring) ─────────────────
+@activity.defn
+async def scan_pr_doc_refs(params: PrDocRefsReviewParams) -> DocRefAnalysis:
+    """Check out the PR head and scan its changed docs for dangling refs.
+
+    Scoped to the PR's changed Markdown, but resolved against the WHOLE head
+    tree (so a code PR that deletes a file flags the doc still linking it) and
+    against the PR's own removals/renames (the ``broken_by_pr`` provenance). The
+    docs and the path index are read in the activity, so the pure scan is
+    unaffected by the workspace being cleaned up.
+    """
+    from froot.adapters.doc_source import (
+        index_paths,
+        load_doc_sources,
+        make_targets,
+    )
+    from froot.adapters.github import GitHubForge
+
+    forge = GitHubForge()
+    changes = await forge.list_pull_request_changes(
+        params.target, params.pr.number
+    )
+    removed: set[str] = set()
+    for change in changes:
+        if change.status == "removed":
+            removed.add(change.filename)
+        if change.previous_filename is not None:
+            removed.add(change.previous_filename)
+    changed = [c.filename for c in changes if c.status != "removed"]
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        await forge.checkout_pull_request(
+            params.target, workspace, params.pr.number
+        )
+        sources = load_doc_sources(workspace, changed)
+        candidates = scan_doc_refs(
+            sources,
+            index_paths(workspace),
+            make_targets(workspace),
+            frozenset(removed),
+        )
+    return DocRefAnalysis(candidates=candidates, scanned_files=len(sources))
+
+
+@activity.defn
+async def adjudicate_doc_refs(
+    params: AdjudicateDocRefsInput,
+) -> tuple[DocRefVerdict, ...]:
+    """Run the model over each dangling reference; return aligned verdicts."""
+    from froot.adapters.doc_refs_judge import DocRefsJudge
+
+    judge = DocRefsJudge()
+    verdicts: list[DocRefVerdict] = []
+    for candidate in params.candidates:
+        verdicts.append(await beating(judge.adjudicate(candidate)))
+    return tuple(verdicts)
+
+
+@activity.defn
+async def post_doc_refs_review(params: PostDocRefsInput) -> str | None:
+    """Upsert (or clear) the doc-refs advisory comment; log the ledger row.
+
+    Posts when there are findings, or to clear a prior comment to "all clear"
+    (true decay). A clean PR with no prior comment stays silent.
+    """
+    from froot.adapters.github import GitHubForge
+
+    forge = GitHubForge()
+    exists = await forge.find_marked_comment(
+        params.target, params.pr.number, DOC_REFS_MARKER
+    )
+    url: str | None = None
+    if should_post_doc_refs(
+        has_findings=bool(params.findings), comment_exists=exists
+    ):
+        body = render_doc_refs_comment(params.findings, params.pr.head_sha)
+        url = await forge.upsert_issue_comment(
+            params.target, params.pr.number, DOC_REFS_MARKER, body
+        )
+    _doc_refs_log.info(
+        json.dumps(
+            {
+                "event": "loop_outcome",
+                "loop": "doc-refs",
+                "repo": params.target.repo.slug,
+                "pr": params.pr.number,
+                "head_sha": params.pr.head_sha,
+                "findings": len(params.findings),
+                "kinds": sorted({f.kind for f in params.findings}),
+                "comment_url": url,
+            }
+        )
+    )
+    return url
+
+
+@activity.defn
+async def dispatch_pr_doc_refs_review(params: DispatchDocRefsInput) -> None:
+    """Start a PR's doc-refs review (idempotent per PR + head SHA)."""
+    from temporalio.common import WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from froot.workflow.pr_doc_refs_review_workflow import (
+        PrDocRefsReviewWorkflow,
+    )
+    from froot.workflow.temporal_client import client, task_queue
+
+    temporal = await client()
+    try:
+        await temporal.start_workflow(
+            PrDocRefsReviewWorkflow.run,
+            PrDocRefsReviewParams(target=params.target, pr=params.pr),
+            id=pr_doc_refs_review_workflow_id(
+                params.target, params.pr.number, params.pr.head_sha
+            ),
+            task_queue=task_queue(),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        # This (PR, head SHA) already has a doc-refs review — a no-op.
         return
