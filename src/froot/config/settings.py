@@ -382,6 +382,26 @@ class DocRefsReviewSettings(BaseSettings):
         return value
 
 
+class AgenticSettings(BaseSettings):
+    """The agentic executor's bounds (``FROOT_AGENTIC_*``).
+
+    The heavier, tool-using model run behind a fabrication/mapper loop's action
+    slot — the doc-coherence reviewer is froot's first. ``max_requests`` is a
+    hard ceiling on model turns so a runaway reasoning loop can't burn the
+    worker; the model itself is the configured Ollama (shared with the thin
+    judges, swappable by config later).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FROOT_AGENTIC_",
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+    )
+
+    max_requests: int = Field(default=40, gt=0)
+
+
 class BehaviorSettings(BaseSettings):
     """Loop-hygiene toggles (``FROOT_*``), both defaulting on.
 
