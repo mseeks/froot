@@ -6,8 +6,14 @@ open PR, and the tick's reported counts.
 
 from __future__ import annotations
 
+import pytest
 from temporalio import activity
-from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.client import (
+    Client,
+    WorkflowExecutionStatus,
+    WorkflowFailureError,
+)
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -88,3 +94,57 @@ async def test_a11y_loop_keeps_running_and_repolls():
             await handle.terminate()
     assert description.status == WorkflowExecutionStatus.RUNNING
     assert len(_dispatched) >= 2  # at least the first tick fanned out
+
+
+@activity.defn(name="list_review_prs")
+async def _mock_list_401(target: object) -> tuple[PullRequestRef, ...]:
+    # The prod incident: a transient GitHub 401, raised non-retryable.
+    raise ApplicationError("GitHub auth failed (401)", non_retryable=True)
+
+
+async def test_a11y_loop_survives_a_failing_tick():
+    """A non-retryable tick error must not kill the durable loop (regression).
+
+    Before the fix the 401 propagated out of the loop body and terminated the
+    continue-as-new loop, so reviews stopped until the watchdog revived it. The
+    loop must instead log the failed tick and keep ticking.
+    """
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        client = await _pydantic_client(env)
+        async with Worker(
+            client,
+            task_queue=_TASK_QUEUE,
+            workflows=[A11yReviewWorkflow],
+            activities=[_mock_list_401, _mock_dispatch],
+        ):
+            handle = await client.start_workflow(
+                A11yReviewWorkflow.run,
+                A11yReviewScanParams(
+                    target=make_repo(), interval_seconds=60, continuous=True
+                ),
+                id="a11y-failing-tick",
+                task_queue=_TASK_QUEUE,
+            )
+            await env.sleep(150)  # span more than one failed tick + reschedule
+            description = await handle.describe()
+            await handle.terminate()
+    assert description.status == WorkflowExecutionStatus.RUNNING
+
+
+async def test_a11y_one_shot_still_fails_loudly():
+    """A one-shot run keeps propagating a tick failure (no silent swallow)."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        client = await _pydantic_client(env)
+        async with Worker(
+            client,
+            task_queue=_TASK_QUEUE,
+            workflows=[A11yReviewWorkflow],
+            activities=[_mock_list_401, _mock_dispatch],
+        ):
+            with pytest.raises(WorkflowFailureError):
+                await client.execute_workflow(
+                    A11yReviewWorkflow.run,
+                    A11yReviewScanParams(target=make_repo(), continuous=False),
+                    id="a11y-one-shot-fail",
+                    task_queue=_TASK_QUEUE,
+                )

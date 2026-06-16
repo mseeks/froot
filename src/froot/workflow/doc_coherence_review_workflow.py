@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import FailureError
 
 with workflow.unsafe.imports_passed_through():
     from froot.workflow import activities
@@ -35,21 +36,36 @@ class DocCoherenceReviewWorkflow:
         self, params: DocCoherenceReviewScanParams
     ) -> DocCoherenceReviewScanResult:
         """List open PRs, dispatch a review each, then loop or return."""
-        prs = await workflow.execute_activity(
-            activities.list_review_prs,
-            params.target,
-            start_to_close_timeout=CI_CHECK_TIMEOUT,
-            retry_policy=TOOL_RETRY,
-        )
-        for pr in prs:
-            await workflow.execute_activity(
-                activities.dispatch_pr_doc_coherence_review,
-                DispatchDocCoherenceInput(target=params.target, pr=pr),
-                start_to_close_timeout=DISPATCH_TIMEOUT,
+        reviewed = 0
+        try:
+            prs = await workflow.execute_activity(
+                activities.list_review_prs,
+                params.target,
+                start_to_close_timeout=CI_CHECK_TIMEOUT,
                 retry_policy=TOOL_RETRY,
             )
+            for pr in prs:
+                await workflow.execute_activity(
+                    activities.dispatch_pr_doc_coherence_review,
+                    DispatchDocCoherenceInput(target=params.target, pr=pr),
+                    start_to_close_timeout=DISPATCH_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+            reviewed = len(prs)
+        except FailureError:
+            # A failed tick is just a slow tick: a one-shot run fails loudly,
+            # but the durable loop logs and rides it out so a transient upstream
+            # fault (e.g. a brief GitHub 401, raised non-retryable) can't
+            # terminate the whole continue-as-new loop. Next tick re-derives it.
+            if not params.continuous:
+                raise
+            workflow.logger.warning(
+                "doc-coherence-review tick failed for %s; retrying next tick",
+                params.target.repo.slug,
+                exc_info=True,
+            )
         result = DocCoherenceReviewScanResult(
-            reviewed=len(prs), dispatched=len(prs)
+            reviewed=reviewed, dispatched=reviewed
         )
         if not params.continuous:
             return result

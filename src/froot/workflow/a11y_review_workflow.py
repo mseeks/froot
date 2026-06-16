@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import FailureError
 
 with workflow.unsafe.imports_passed_through():
     from froot.workflow import activities
@@ -36,20 +37,35 @@ class A11yReviewWorkflow:
     @workflow.run
     async def run(self, params: A11yReviewScanParams) -> A11yReviewScanResult:
         """List open PRs, dispatch an a11y review each, then loop/return."""
-        prs = await workflow.execute_activity(
-            activities.list_review_prs,
-            params.target,
-            start_to_close_timeout=CI_CHECK_TIMEOUT,
-            retry_policy=TOOL_RETRY,
-        )
-        for pr in prs:
-            await workflow.execute_activity(
-                activities.dispatch_pr_a11y_review,
-                DispatchA11yInput(target=params.target, pr=pr),
-                start_to_close_timeout=DISPATCH_TIMEOUT,
+        reviewed = 0
+        try:
+            prs = await workflow.execute_activity(
+                activities.list_review_prs,
+                params.target,
+                start_to_close_timeout=CI_CHECK_TIMEOUT,
                 retry_policy=TOOL_RETRY,
             )
-        result = A11yReviewScanResult(reviewed=len(prs), dispatched=len(prs))
+            for pr in prs:
+                await workflow.execute_activity(
+                    activities.dispatch_pr_a11y_review,
+                    DispatchA11yInput(target=params.target, pr=pr),
+                    start_to_close_timeout=DISPATCH_TIMEOUT,
+                    retry_policy=TOOL_RETRY,
+                )
+            reviewed = len(prs)
+        except FailureError:
+            # A failed tick is just a slow tick: a one-shot run fails loudly,
+            # but the durable loop logs and rides it out so a transient upstream
+            # fault (e.g. a brief GitHub 401, raised non-retryable) can't
+            # terminate the whole continue-as-new loop. Next tick re-derives it.
+            if not params.continuous:
+                raise
+            workflow.logger.warning(
+                "a11y-review tick failed for %s; retrying next tick",
+                params.target.repo.slug,
+                exc_info=True,
+            )
+        result = A11yReviewScanResult(reviewed=reviewed, dispatched=reviewed)
         if not params.continuous:
             return result
         # Durable loop: sleep, then restart fresh. continue_as_new raises, so

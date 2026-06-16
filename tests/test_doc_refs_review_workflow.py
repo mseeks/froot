@@ -1,7 +1,8 @@
-"""Integration test for the determinism-review loop on a time-skipping server.
+"""Integration test for the doc-refs-review loop on a time-skipping server.
 
-Mocks the list + dispatch activities to verify the fan-out: one dispatch per
-open PR, and the tick's reported counts.
+Mocks the list + dispatch activities to verify the fan-out (one dispatch per
+open PR, the tick's reported counts) and the loop's durability across a failed
+tick — the regression behind the prod a11y dead-loop alert, identical here.
 """
 
 from __future__ import annotations
@@ -18,16 +19,16 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from froot.domain.pull_request import PullRequestRef
-from froot.workflow.review_workflow import ReviewWorkflow
+from froot.workflow.doc_refs_review_workflow import DocRefsReviewWorkflow
 from froot.workflow.runtime import DATA_CONVERTER
 from froot.workflow.types import (
-    DispatchReviewInput,
-    ReviewScanParams,
-    ReviewScanResult,
+    DispatchDocRefsInput,
+    DocRefsReviewScanParams,
+    DocRefsReviewScanResult,
 )
 from tests.support import make_pr, make_repo
 
-_TASK_QUEUE = "froot-test-review"
+_TASK_QUEUE = "froot-test-doc-refs-review"
 _dispatched: list[int] = []
 
 
@@ -39,9 +40,15 @@ async def _mock_list(target: object) -> tuple[PullRequestRef, ...]:
     )
 
 
-@activity.defn(name="dispatch_pr_review")
-async def _mock_dispatch(params: DispatchReviewInput) -> None:
+@activity.defn(name="dispatch_pr_doc_refs_review")
+async def _mock_dispatch(params: DispatchDocRefsInput) -> None:
     _dispatched.append(params.pr.number)
+
+
+@activity.defn(name="list_review_prs")
+async def _mock_list_401(target: object) -> tuple[PullRequestRef, ...]:
+    # The prod incident: a transient GitHub 401, raised non-retryable.
+    raise ApplicationError("GitHub auth failed (401)", non_retryable=True)
 
 
 async def _pydantic_client(env: WorkflowEnvironment) -> Client:
@@ -50,20 +57,20 @@ async def _pydantic_client(env: WorkflowEnvironment) -> Client:
     return Client(**config)
 
 
-async def test_review_dispatches_each_open_pr():
+async def test_doc_refs_dispatches_each_open_pr():
     _dispatched.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
         async with Worker(
             client,
             task_queue=_TASK_QUEUE,
-            workflows=[ReviewWorkflow],
+            workflows=[DocRefsReviewWorkflow],
             activities=[_mock_list, _mock_dispatch],
         ):
-            result: ReviewScanResult = await client.execute_workflow(
-                ReviewWorkflow.run,
-                ReviewScanParams(target=make_repo(), continuous=False),
-                id="review-test",
+            result: DocRefsReviewScanResult = await client.execute_workflow(
+                DocRefsReviewWorkflow.run,
+                DocRefsReviewScanParams(target=make_repo(), continuous=False),
+                id="doc-refs-review-test",
                 task_queue=_TASK_QUEUE,
             )
     assert result.reviewed == 2
@@ -71,22 +78,22 @@ async def test_review_dispatches_each_open_pr():
     assert sorted(_dispatched) == [1, 2]
 
 
-async def test_review_loop_keeps_running_and_repolls():
+async def test_doc_refs_loop_keeps_running_and_repolls():
     _dispatched.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
         async with Worker(
             client,
             task_queue=_TASK_QUEUE,
-            workflows=[ReviewWorkflow],
+            workflows=[DocRefsReviewWorkflow],
             activities=[_mock_list, _mock_dispatch],
         ):
             handle = await client.start_workflow(
-                ReviewWorkflow.run,
-                ReviewScanParams(
+                DocRefsReviewWorkflow.run,
+                DocRefsReviewScanParams(
                     target=make_repo(), interval_seconds=60, continuous=True
                 ),
-                id="review-continuous",
+                id="doc-refs-review-continuous",
                 task_queue=_TASK_QUEUE,
             )
             await env.sleep(90)
@@ -96,13 +103,7 @@ async def test_review_loop_keeps_running_and_repolls():
     assert len(_dispatched) >= 2  # at least the first tick fanned out
 
 
-@activity.defn(name="list_review_prs")
-async def _mock_list_401(target: object) -> tuple[PullRequestRef, ...]:
-    # The prod incident: a transient GitHub 401, raised non-retryable.
-    raise ApplicationError("GitHub auth failed (401)", non_retryable=True)
-
-
-async def test_review_loop_survives_a_failing_tick():
+async def test_doc_refs_loop_survives_a_failing_tick():
     """A non-retryable tick error must not kill the durable loop (regression).
 
     Before the fix the 401 propagated out of the loop body and terminated the
@@ -114,15 +115,15 @@ async def test_review_loop_survives_a_failing_tick():
         async with Worker(
             client,
             task_queue=_TASK_QUEUE,
-            workflows=[ReviewWorkflow],
+            workflows=[DocRefsReviewWorkflow],
             activities=[_mock_list_401, _mock_dispatch],
         ):
             handle = await client.start_workflow(
-                ReviewWorkflow.run,
-                ReviewScanParams(
+                DocRefsReviewWorkflow.run,
+                DocRefsReviewScanParams(
                     target=make_repo(), interval_seconds=60, continuous=True
                 ),
-                id="review-failing-tick",
+                id="doc-refs-failing-tick",
                 task_queue=_TASK_QUEUE,
             )
             await env.sleep(150)  # span more than one failed tick + reschedule
@@ -131,20 +132,22 @@ async def test_review_loop_survives_a_failing_tick():
     assert description.status == WorkflowExecutionStatus.RUNNING
 
 
-async def test_review_one_shot_still_fails_loudly():
+async def test_doc_refs_one_shot_still_fails_loudly():
     """A one-shot run keeps propagating a tick failure (no silent swallow)."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client = await _pydantic_client(env)
         async with Worker(
             client,
             task_queue=_TASK_QUEUE,
-            workflows=[ReviewWorkflow],
+            workflows=[DocRefsReviewWorkflow],
             activities=[_mock_list_401, _mock_dispatch],
         ):
             with pytest.raises(WorkflowFailureError):
                 await client.execute_workflow(
-                    ReviewWorkflow.run,
-                    ReviewScanParams(target=make_repo(), continuous=False),
-                    id="review-one-shot-fail",
+                    DocRefsReviewWorkflow.run,
+                    DocRefsReviewScanParams(
+                        target=make_repo(), continuous=False
+                    ),
+                    id="doc-refs-one-shot-fail",
                     task_queue=_TASK_QUEUE,
                 )
