@@ -141,6 +141,21 @@ def test_github_token_absent_is_none(monkeypatch: pytest.MonkeyPatch):
     assert GitHubSettings().github_token is None
 
 
+def test_pr_assignees_default_empty(monkeypatch: pytest.MonkeyPatch):
+    # Unset → no one is assigned, so an existing deployment is unchanged.
+    monkeypatch.delenv("FROOT_PR_ASSIGNEES", raising=False)
+    assert GitHubSettings().pr_assignees == ()
+
+
+def test_pr_assignees_parsed_stripped_and_at_tolerated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Comma-separated, surrounding space trimmed, a leading @ tolerated, and
+    # blank entries dropped — so "@mseeks, bot ," yields the two bare logins.
+    monkeypatch.setenv("FROOT_PR_ASSIGNEES", "@mseeks, bot ,")
+    assert GitHubSettings().pr_assignees == ("mseeks", "bot")
+
+
 def test_model_settings_defaults_and_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("FROOT_OLLAMA_MODEL", raising=False)
     monkeypatch.delenv("FROOT_OLLAMA_URL", raising=False)

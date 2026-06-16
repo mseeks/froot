@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from datetime import timedelta
@@ -16,6 +17,7 @@ from froot.adapters.github import (
     ci_status_from_checks,
 )
 from froot.domain.ci import CIAbsent, CIFailed, CIPassed, CIPending
+from froot.domain.pull_request import BranchName, PullRequestDraft
 from tests.support import make_repo
 
 
@@ -295,3 +297,60 @@ async def test_upsert_finds_its_marker_on_a_later_page_and_edits():
         restore()
     assert url == "https://github.com/x#c2"
     assert calls.get("patched") and not calls.get("posted")
+
+
+def _draft(
+    branch: str = "froot/dependency-patch/left-pad-1.4.3",
+) -> PullRequestDraft:
+    return PullRequestDraft(
+        branch=BranchName(value=branch),
+        base="main",
+        title="deps: bump left-pad to 1.4.3",
+        body="the changelog framing",
+    )
+
+
+async def test_open_pull_request_assigns_configured_logins(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The new behavior: with FROOT_PR_ASSIGNEES set, opening a PR follows up
+    # with the Issues "add assignees" call (the create-PR endpoint ignores
+    # assignees), carrying exactly the configured logins.
+    monkeypatch.setenv("FROOT_PR_ASSIGNEES", "mseeks")
+    assigned: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/assignees"):
+            assigned["path"] = request.url.path
+            assigned["body"] = json.loads(request.content)
+        return httpx.Response(201, json=_pr(7))
+
+    forge, restore = _mock_forge(handler)
+    try:
+        ref = await forge.open_pull_request(make_repo(), _draft())
+    finally:
+        restore()
+    assert ref.number == 7
+    assert assigned["path"] == "/repos/acme/widgets/issues/7/assignees"
+    assert assigned["body"] == {"assignees": ["mseeks"]}
+
+
+async def test_open_pull_request_assigns_nobody_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Default behavior preserved: no FROOT_PR_ASSIGNEES → no assignees call at
+    # all, so an existing deployment opens PRs exactly as before.
+    monkeypatch.delenv("FROOT_PR_ASSIGNEES", raising=False)
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(201, json=_pr(7))
+
+    forge, restore = _mock_forge(handler)
+    try:
+        ref = await forge.open_pull_request(make_repo(), _draft())
+    finally:
+        restore()
+    assert ref.number == 7
+    assert paths == ["/repos/acme/widgets/pulls"]

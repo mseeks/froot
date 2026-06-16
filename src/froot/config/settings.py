@@ -167,6 +167,24 @@ class GitHubSettings(BaseSettings):
     )
 
     github_token: SecretStr | None = None
+    # Logins to assign on every PR froot opens (``FROOT_PR_ASSIGNEES``, a
+    # comma-separated list; a leading ``@`` is tolerated). Empty by default, so
+    # an existing deployment assigns no one and is unchanged. Assigning the
+    # token's *own* user is silent (GitHub never notifies you of your own
+    # action); assigning a *different* user notifies them.
+    pr_assignees: Annotated[tuple[str, ...], NoDecode] = ()
+
+    @field_validator("pr_assignees", mode="before")
+    @classmethod
+    def _parse_assignees(cls, value: object) -> object:
+        """Parse ``FROOT_PR_ASSIGNEES`` as a comma-separated login list."""
+        if not isinstance(value, str):
+            return value
+        return tuple(
+            entry.strip().lstrip("@")
+            for entry in value.split(",")
+            if entry.strip()
+        )
 
 
 class ModelSettings(BaseSettings):

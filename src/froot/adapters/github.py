@@ -13,6 +13,7 @@ read at the boundary as untyped payloads and coerced into the domain.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -50,6 +51,8 @@ _API_VERSION = "2022-11-28"
 _TIMEOUT = 30.0
 _COMMITTER_NAME = "froot"
 _COMMITTER_EMAIL = "froot@users.noreply.github.com"
+
+_log = logging.getLogger("froot.github")
 
 # Check-run conclusions that mean the change is not safe to merge.
 _BAD_CONCLUSIONS = frozenset(
@@ -451,7 +454,11 @@ class GitHubForge:
     async def open_pull_request(
         self, target: TargetRepo, draft: PullRequestDraft
     ) -> PullRequestRef:
-        """Open the PR for an already-pushed branch (idempotent on conflict)."""
+        """Open the PR for an already-pushed branch (idempotent on conflict).
+
+        After the PR exists, assign any configured logins
+        (:meth:`_assign_pr`) — a best-effort convenience, never load-bearing.
+        """
         async with _client() as client:
             resp = await client.post(
                 f"/repos/{target.repo.slug}/pulls",
@@ -465,9 +472,54 @@ class GitHubForge:
         if resp.status_code == 422:
             existing = await self.find_open_pull_request(target, draft.branch)
             if existing is not None:
+                await self._assign_pr(target, existing.number)
                 return existing
         _raise_for_status(resp)
-        return _pull_request_ref(resp.json())
+        ref = _pull_request_ref(resp.json())
+        await self._assign_pr(target, ref.number)
+        return ref
+
+    async def _assign_pr(self, target: TargetRepo, number: int) -> None:
+        """Assign the configured logins to PR ``number`` (best-effort).
+
+        Driven by ``FROOT_PR_ASSIGNEES`` — empty by default, so this is a no-op
+        and froot's existing behavior is unchanged. A PR is an issue under the
+        hood, but the create-PR endpoint ignores ``assignees``; the assignment
+        is this separate Issues call. It is idempotent (re-assigning a login
+        already on the PR is a no-op, and GitHub silently drops a login it
+        can't assign), so a re-run never double-acts.
+
+        Best-effort by design: the opened PR is the product, the assignee a
+        convenience signal, so a failure here is logged and swallowed, never
+        raised. Raising would fail the open activity, and the retry would only
+        re-find the now-open PR and skip the assign anyway — leaving it
+        unassigned for no gain — so swallowing is strictly better.
+        """
+        assignees = GitHubSettings().pr_assignees
+        if not assignees:
+            return
+        try:
+            async with _client() as client:
+                resp = await client.post(
+                    f"/repos/{target.repo.slug}/issues/{number}/assignees",
+                    json={"assignees": list(assignees)},
+                )
+            if resp.status_code >= 400:
+                _log.warning(
+                    "could not assign %s to %s#%d (HTTP %d)",
+                    ", ".join(assignees),
+                    target.repo.slug,
+                    number,
+                    resp.status_code,
+                )
+        except httpx.HTTPError as exc:
+            _log.warning(
+                "could not assign %s to %s#%d: %s",
+                ", ".join(assignees),
+                target.repo.slug,
+                number,
+                exc,
+            )
 
     async def ci_status(self, target: TargetRepo, head_sha: str) -> CIStatus:
         """Read the repo's combined CI status for a commit (the oracle).
