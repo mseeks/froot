@@ -15,7 +15,7 @@ from froot.domain.loop import Loop
 from froot.policy.autonomy import AutonomyPolicy
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
-REPO = "mseeks/revisionist"
+REPO = "mseeks/everwhen"
 
 
 def _pr(
@@ -59,7 +59,7 @@ def _bump(
     close: datetime | None = None,
 ) -> BumpExecution:
     return BumpExecution(
-        workflow_id=f"froot-bump-mseeks-revisionist-{suffix}",
+        workflow_id=f"froot-bump-mseeks-everwhen-{suffix}",
         status=status,
         start=datetime(2026, 6, 2, 19, 45, tzinfo=UTC),
         close=close,
@@ -124,7 +124,7 @@ def _rich_model() -> DashboardModel:
     ]
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="running",
             start=opened1,
         )
@@ -213,7 +213,7 @@ def test_scan_loop_reports_none_when_no_execution():
 def test_scan_loop_not_live_when_terminated():
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="terminated",
             start=NOW,
         )
@@ -225,12 +225,12 @@ def test_scan_loop_not_live_when_terminated():
 
 def test_latest_scan_execution_wins():
     older = ScanExecution(
-        workflow_id="froot-scan-mseeks-revisionist",
+        workflow_id="froot-scan-mseeks-everwhen",
         status="continued_as_new",
         start=datetime(2026, 6, 1, 0, 0, tzinfo=UTC),
     )
     newer = ScanExecution(
-        workflow_id="froot-scan-mseeks-revisionist",
+        workflow_id="froot-scan-mseeks-everwhen",
         status="running",
         start=datetime(2026, 6, 3, 0, 0, tzinfo=UTC),
     )
@@ -331,7 +331,7 @@ def test_source_health_reflects_errors():
 def _review(status: str = "running") -> AdvisoryExecution:
     return AdvisoryExecution(
         loop=Loop.DETERMINISM_REVIEW,
-        workflow_id="froot-review-mseeks-revisionist",
+        workflow_id="froot-review-mseeks-everwhen",
         status=status,
         start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
     )
@@ -347,7 +347,7 @@ def _pr_review(
 ) -> PrAdvisoryExecution:
     return PrAdvisoryExecution(
         loop=Loop.DETERMINISM_REVIEW,
-        workflow_id=f"froot-pr-review-mseeks-revisionist-{pr}-{head}",
+        workflow_id=f"froot-pr-review-mseeks-everwhen-{pr}-{head}",
         status=status,
         start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
         close=datetime(2026, 6, 3, 11, 51, tzinfo=UTC),
@@ -362,7 +362,7 @@ def _pr_review(
 def _a11y(status: str = "running") -> AdvisoryExecution:
     return AdvisoryExecution(
         loop=Loop.A11Y_REVIEW,
-        workflow_id="froot-a11y-mseeks-revisionist",
+        workflow_id="froot-a11y-mseeks-everwhen",
         status=status,
         start=datetime(2026, 6, 3, 11, 55, tzinfo=UTC),
     )
@@ -378,7 +378,7 @@ def _pr_a11y(
 ) -> PrAdvisoryExecution:
     return PrAdvisoryExecution(
         loop=Loop.A11Y_REVIEW,
-        workflow_id=f"froot-pr-a11y-mseeks-revisionist-{pr}-{head}",
+        workflow_id=f"froot-pr-a11y-mseeks-everwhen-{pr}-{head}",
         status=status,
         start=datetime(2026, 6, 3, 11, 50, tzinfo=UTC),
         close=datetime(2026, 6, 3, 11, 51, tzinfo=UTC),
@@ -985,7 +985,7 @@ def test_bump_loops_attribute_failures_by_workflow_id():
     # security-patch — failures land in the right loop's view.
     dep_fail = _bump("left-pad-1.0.0", "failed", reason="boom")
     sec_fail = BumpExecution(
-        workflow_id="froot-bump-security-patch-mseeks-revisionist-x-1.0.0",
+        workflow_id="froot-bump-security-patch-mseeks-everwhen-x-1.0.0",
         status="failed",
         start=datetime(2026, 6, 2, 19, 45, tzinfo=UTC),
         close=None,
@@ -1019,17 +1019,17 @@ def test_scan_loop_counts_recent_failures_across_executions():
     # window, not just the latest execution's status.
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 1, tzinfo=UTC),
         ),
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 2, tzinfo=UTC),
         ),
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="running",
             start=datetime(2026, 6, 3, tzinfo=UTC),
         ),
@@ -1042,12 +1042,12 @@ def test_scan_loop_counts_recent_failures_across_executions():
 def test_repeatedly_failing_loop_is_flapping():
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 1, tzinfo=UTC),
         ),
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 2, tzinfo=UTC),
         ),
@@ -1062,12 +1062,12 @@ def test_repeatedly_failing_loop_is_flapping():
 def test_single_failure_is_not_flapping():
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 1, tzinfo=UTC),
         ),
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="running",
             start=datetime(2026, 6, 2, tzinfo=UTC),
         ),

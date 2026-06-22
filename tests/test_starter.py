@@ -29,7 +29,7 @@ from froot.workflow.types import (
 )
 from tests.support import make_repo
 
-REPO = make_repo("mseeks/revisionist")
+REPO = make_repo("mseeks/everwhen")
 REPO2 = make_repo("mseeks/froot")
 
 _ACTING = (Loop.DEPENDENCY_PATCH, Loop.SECURITY_PATCH, Loop.DEAD_CODE)
@@ -143,7 +143,7 @@ def test_one_plan_per_repo():
     ps = _plans(repos=(REPO, REPO2), loops=(Loop.DEPENDENCY_PATCH,), a11y=True)
     # 2 repos x (dependency scan + determinism + a11y) = 6
     assert len(ps) == 6
-    assert {p.slug for p in ps} == {"mseeks/revisionist", "mseeks/froot"}
+    assert {p.slug for p in ps} == {"mseeks/everwhen", "mseeks/froot"}
 
 
 def test_advisory_wiring_routes_each_loop_to_its_own_workflow():

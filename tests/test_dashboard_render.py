@@ -16,7 +16,7 @@ from froot.domain.loop import Loop
 from froot.policy.autonomy import AutonomyPolicy
 
 NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
-REPO = "mseeks/revisionist"
+REPO = "mseeks/everwhen"
 
 
 def _model(
@@ -242,7 +242,7 @@ def test_telemetry_panel_renders_activity_rows_when_available():
 def test_scan_cadence_shows_liveness_and_next_due():
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="running",
             start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
         )
@@ -261,7 +261,7 @@ def _adv_loop(
 ) -> AdvisoryExecution:
     return AdvisoryExecution(
         loop=loop,
-        workflow_id=f"froot-{slug}-mseeks-revisionist",
+        workflow_id=f"froot-{slug}-mseeks-everwhen",
         status=status,
         start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
     )
@@ -277,7 +277,7 @@ def _pr_adv(
 ) -> PrAdvisoryExecution:
     return PrAdvisoryExecution(
         loop=loop,
-        workflow_id=f"froot-pr-{slug}-mseeks-revisionist-{pr}-abc1234def56",
+        workflow_id=f"froot-pr-{slug}-mseeks-everwhen-{pr}-abc1234def56",
         status="completed",
         start=datetime(2026, 6, 3, 6, 0, tzinfo=UTC),
         close=datetime(2026, 6, 3, 6, 1, tzinfo=UTC),
@@ -408,7 +408,7 @@ def _clean_green(number: int, package: str) -> tuple[GithubPr, BumpExecution]:
         number, package, "merged", verdict="clean", opened=opened, merged=merged
     )
     bump = BumpExecution(
-        workflow_id=f"froot-bump-mseeks-revisionist-{package}",
+        workflow_id=f"froot-bump-mseeks-everwhen-{package}",
         status="completed",
         start=opened,
         close=merged,
@@ -549,19 +549,19 @@ def test_bumps_fold_lists_bumps_with_post_merge_column():
 def test_header_shows_flapping_badge_when_a_loop_keeps_failing():
     scans = [
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 1, tzinfo=UTC),
         ),
         ScanExecution(
-            workflow_id="froot-scan-mseeks-revisionist",
+            workflow_id="froot-scan-mseeks-everwhen",
             status="failed",
             start=datetime(2026, 6, 2, tzinfo=UTC),
         ),
     ]
     html = render.page(_model(scans=scans))
     assert "1 flapping" in html
-    assert "mseeks/revisionist (2x)" in html  # the tooltip detail
+    assert "mseeks/everwhen (2x)" in html  # the tooltip detail
 
 
 def test_header_has_no_flapping_badge_when_every_loop_is_healthy():

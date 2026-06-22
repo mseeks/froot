@@ -6,7 +6,7 @@ from froot.policy.autonomy import (
     pr_autonomy,
 )
 
-REPO = "mseeks/revisionist"
+REPO = "mseeks/everwhen"
 
 
 def _policy(**overrides: object) -> AutonomyPolicy:
